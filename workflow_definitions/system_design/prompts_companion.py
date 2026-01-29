@@ -59,6 +59,57 @@ EXTRACT_PROBLEM_PROMPT = ChatPromptTemplate.from_template(
     """
 )
 
+CHECK_PROBLEM_SPACE_PROMPT = ChatPromptTemplate.from_template(
+    """You are a System Design expert reviewing a formalized "Problem Space" definition.
+
+    Problem Space to Check:
+    Context: {context}
+    Invariants: {invariants}
+    Goal: {goal}
+    Problem: {problem}
+    Variants: {variants}
+
+    **Task:**
+    Analyze this definition for internal consistency and logic. You rely ONLY on the provided Problem Space.
+    
+    Check for:
+    1. **Goal Prevention:** Does the problem description or invariants logically prevent the goal from ever being achieved?
+    2. **Intersection:** Do any Invariants conflict with Variants? (e.g. Invariant says "Must be on-premise" but Variant says "Cloud provider options").
+    3. **Coherence:** Does the Problem statement make sense given the Invariants and Goal?
+    
+    **Output Rules:**
+    - Return a list of observations.
+    - Be gentle/constructive. Do not force contradictions if there are none.
+    - If everything looks good, return an empty list or a single observation saying "Consistent".
+    - DO NOT suggest solutions or fixes. Only state what is potentially slightly off.
+    """
+)
+
+REFINE_PROBLEM_SPACE_PROMPT = ChatPromptTemplate.from_template(
+    """You are a System Design Companion. You are refining a Problem Space definition based on a consistency check.
+
+    Current Problem Space:
+    Context: {context}
+    Invariants: {invariants}
+    Goal: {goal}
+    Problem: {problem}
+    Variants: {variants}
+
+    User's Original Input (for reference): {chat_input}
+
+    Consistency Observations:
+    {observations}
+
+    **Task:**
+    - Review the Observations.
+    - If the Observations point out valid logical inconsistencies, adjust the Problem Space (Invariants, Variants, Problem description) to resolve them.
+    - If the Observations are minor or not applicable, you can keep the Problem Space as is.
+    - Ensure the Core User Intent from `chat_input` is preserved.
+
+    Return the fully structured Problem Space.
+    """
+)
+
 DRAFT_SOLUTIONS_PROMPT = ChatPromptTemplate.from_template(
     """You are a System Design expert. Given the following Problem Space, generate 3 distinct solution candidates.
     

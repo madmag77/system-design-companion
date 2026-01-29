@@ -20,7 +20,9 @@ from langgraph.checkpoint.memory import MemorySaver
 from workflow_definitions.system_design.functions_companion import (
     load_workspace_state,
     extract_problem,
-    save_state
+    save_state, 
+    check_problem_space,
+    refine_problem_space,
 )
 from app.backend.workspace import WorkspaceManager
 
@@ -55,7 +57,9 @@ if "app" not in st.session_state:
     fn_map = {
         "load_workspace_state": load_workspace_state,
         "extract_problem": extract_problem,
-        "save_state": save_state
+        "save_state": save_state,
+        "check_problem_space": check_problem_space,
+        "refine_problem_space": refine_problem_space,
     }
     workflow_path = "workflow_definitions/system_design/companion.wirl"
     st.session_state.app = build_pregel_graph(workflow_path, fn_map, checkpointer=MemorySaver())

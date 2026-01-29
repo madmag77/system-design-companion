@@ -36,12 +36,42 @@ workflow SystemDesignCompanion {
       }
   }
 
+  node CheckProblemSpace {
+      call check_problem_space
+      inputs {
+          Record problem_space = ExtractProblem.new_problem_space
+      }
+      const {
+        model: "gpt-oss:20b"
+      }
+      outputs {
+          List<String> observations
+      }
+  }
+
+  node RefineProblemSpace {
+      call refine_problem_space
+      inputs {
+          Record current_problem = ExtractProblem.new_problem_space
+          String chat_input = chat_input
+          List<String> observations = CheckProblemSpace.observations
+          Bool previous_has_changes = ExtractProblem.has_changes
+      }
+      const {
+        model: "gpt-oss:20b"
+      }
+      outputs {
+          Record new_problem_space
+          Bool has_changes
+      }
+  }
+
   node SaveState {
       call save_state
       inputs {
-          Record problem_space = ExtractProblem.new_problem_space
+          Record problem_space = RefineProblemSpace.new_problem_space
           String workspace_id = workspace_id
-          Bool has_changes = ExtractProblem.has_changes
+          Bool has_changes = RefineProblemSpace.has_changes
       }
       outputs {
           String final_version_id
