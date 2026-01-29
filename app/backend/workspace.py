@@ -17,6 +17,7 @@ class Variant(BaseModel):
     text: str
 
 class ProblemSpace(BaseModel):
+    context: str = Field(default="", description="One sentence system description")
     invariants: List[str] = Field(default_factory=list, description="Hard constraints")
     goal: str = Field(default="", description="Single sentence objective")
     problem: str = Field(default="", description="Conflict description")

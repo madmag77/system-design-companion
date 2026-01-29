@@ -71,6 +71,9 @@ def render_workspace_view(ws_data):
     ss = ws_data.get("solution_space", {})
     
     st.header("Problem Space")
+
+    st.subheader("Context")
+    st.write(ps.get("context") or "_No context defined_")
     
     with st.expander("Invariants", expanded=True):
         if ps.get("invariants"):

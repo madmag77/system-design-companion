@@ -57,6 +57,7 @@ def extract_problem(chat_input: str, current_problem: dict, config: dict = None)
     
     # Format inputs
     inputs = {
+        "context": current_problem.get("context", ""),
         "invariants": current_problem.get("invariants", []),
         "goal": current_problem.get("goal", ""),
         "problem": current_problem.get("problem", ""),
