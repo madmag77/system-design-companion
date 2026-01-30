@@ -27,6 +27,7 @@ class SolutionCandidate(BaseModel):
     id: int
     hypothesis: str = Field(description="Changes in Variants/Invariants")
     model: str = Field(description="Description of the solution")
+    reasoning: str = Field(description="Why this is a solution", default="")
 
 class Comparison(BaseModel):
     analysis: str = Field(description="comparative analysis")

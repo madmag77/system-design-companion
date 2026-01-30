@@ -155,3 +155,33 @@ REFINE_SOLUTIONS_PROMPT = ChatPromptTemplate.from_template(
     Return the refined Solution Space including candidates, comparison, and simplification feedback.
     """
 )
+
+GENERATE_SOLUTIONS_PROMPT = ChatPromptTemplate.from_template(
+    """You are a Principal Software Architect.
+    
+    You are given a well-defined "Problem Space".
+    Your task is to generate a "Solution Space" containing 3 distinct, viable solution candidates that solve the Problem within the constraints (Invariants).
+
+    Problem Space:
+    Context: {context}
+    Invariants: {invariants}
+    Goal: {goal}
+    Problem: {problem}
+    Variants: {variants}
+
+    **Task:**
+    1. Analyze the Problem Space.
+    2. Generate 3 distinct Solution Candidates.
+    
+    For each Candidate:
+    - **Hypothesis**: A concise statement proposing specific choices for the "Variants" (degrees of freedom) that will resolve the "Problem". (e.g., "By switching from Monolith to Microservices and using async messaging, we resolve the coupling issue.")
+    - **Model**: A detailed technical description of the solution architecture. Describe components, data flow, and technologies.
+    - **Reasoning**: A surrogate reasoning argument explaining WHY this model satisfies the Goal and adheres to Invariants. Explain the trade-offs accepted.
+
+    3. **Comparison**: Compare the 3 candidates (Pros/Cons, Complexity, Cost).
+    4. **Recommendation**: Recommend one candidate and explain why.
+    5. **Simplification**: Suggest one way to simplify the recommended solution further (remove a component, relax a constraint, etc.).
+
+    Output must be structured as a SolutionSpace object.
+    """
+)

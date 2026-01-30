@@ -7,7 +7,8 @@ from pydantic import BaseModel
 from workflow_definitions.system_design.prompts_companion import (
     EXTRACT_PROBLEM_PROMPT,
     CHECK_PROBLEM_SPACE_PROMPT,
-    REFINE_PROBLEM_SPACE_PROMPT
+    REFINE_PROBLEM_SPACE_PROMPT,
+    GENERATE_SOLUTIONS_PROMPT
 )
 
 logger = logging.getLogger(__name__)
@@ -18,17 +19,21 @@ def get_llm(config: dict = None):
         model = config.get("model", model)
     return ChatOllama(model=model, temperature=0.1)
 
-def save_state(problem_space: dict, workspace_id: str, has_changes: bool, config: dict = None) -> dict:
+def save_state(problem_space: dict, workspace_id: str, has_changes: bool = False, solution_space: dict = None, config: dict = None) -> dict:
     if not workspace_id or not problem_space:
         logger.warning("save_state missing inputs")
         return {}
     
-    if not has_changes:
+    if not has_changes and not solution_space:
         return {
             "final_version_id": workspace_id
         }
     
-    save_res = update_workspace(workspace_id, problem_space, None, config)
+    # Check if we are adding a solution space to a workspace that doesn't need problem space update
+    # In this design, we always pass problem_space. 
+    # If solution_space is generated, we treat it as a change.
+    
+    save_res = update_workspace(workspace_id, problem_space, solution_space, config)
     new_version_id = save_res.get("new_version_id")
     
     return {
@@ -133,6 +138,26 @@ def refine_problem_space(current_problem: dict, chat_input: str, observations: L
     return {
         "new_problem_space": result.model_dump(),
         "has_changes": previous_has_changes or refine_changes
+    }
+
+def generate_solutions(problem_space: dict, config: dict = None) -> dict:
+    llm = get_llm(config)
+    structured_llm = llm.with_structured_output(SolutionSpace)
+    
+    chain = GENERATE_SOLUTIONS_PROMPT | structured_llm
+    
+    inputs = {
+        "context": problem_space.get("context", ""),
+        "invariants": problem_space.get("invariants", []),
+        "goal": problem_space.get("goal", ""),
+        "problem": problem_space.get("problem", ""),
+        "variants": problem_space.get("variants", [])
+    }
+    
+    result: SolutionSpace = chain.invoke(inputs)
+    
+    return {
+        "solution_space": result.model_dump()
     }
 
 
