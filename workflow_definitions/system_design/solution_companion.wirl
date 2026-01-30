@@ -21,10 +21,26 @@ workflow SolutionDesignCompanion {
       }
   }
 
-  node GenerateSolutions {
-      call generate_solutions
+  node GenerateCandidate {
+      call generate_candidate
       inputs {
           Record problem_space = LoadWorkspace.problem_space
+          Record solution_space = LoadWorkspace.solution_space?
+      }
+      const {
+        model: "gemma3:27b"
+      }
+      outputs {
+          Record candidate
+      }
+  }
+
+  node CompareSolutions {
+      call compare_solutions
+      inputs {
+          Record problem_space = LoadWorkspace.problem_space
+          Record solution_space = LoadWorkspace.solution_space?
+          Record candidate = GenerateCandidate.candidate
       }
       const {
         model: "gemma3:27b"
@@ -39,7 +55,7 @@ workflow SolutionDesignCompanion {
       inputs {
           Record problem_space = LoadWorkspace.problem_space
           String workspace_id = workspace_id
-          Record solution_space = GenerateSolutions.solution_space
+          Record solution_space = CompareSolutions.solution_space
       }
       outputs {
           String final_version_id

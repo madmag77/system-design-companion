@@ -110,78 +110,53 @@ REFINE_PROBLEM_SPACE_PROMPT = ChatPromptTemplate.from_template(
     """
 )
 
-DRAFT_SOLUTIONS_PROMPT = ChatPromptTemplate.from_template(
-    """You are a System Design expert. Given the following Problem Space, generate 3 distinct solution candidates.
-    
-    Problem Space:
-    Invariants: {invariants}
-    Goal: {goal}
-    Problem: {problem}
-    Variants: {variants}
-    
-    Generate 3 candidates. For each candidate:
-    1. Hypothesis: What changes in Variants enable the solution?
-    2. Model: Brief technical description.
-    
-    Then provide a comparison and a recommendation.
-    """
-)
-
-CRITIQUE_SOLUTIONS_PROMPT = ChatPromptTemplate.from_template(
-    """Critique the following solution candidates against the Invariants.
-    
-    Invariants: {invariants}
-    
-    Candidates:
-    {candidates}
-    
-    Check for:
-    1. Do they strictly adhere to invariants?
-    2. Are they over-engineered?
-    3. Is the reasoning sound?
-    
-    Provide a critique summary.
-    """
-)
-
-REFINE_SOLUTIONS_PROMPT = ChatPromptTemplate.from_template(
-    """Refine the solution candidates based on the critique.
-    
-    Critique: {critique}
-    
-    Current Candidates:
-    {candidates}
-    
-    Return the refined Solution Space including candidates, comparison, and simplification feedback.
-    """
-)
-
-GENERATE_SOLUTIONS_PROMPT = ChatPromptTemplate.from_template(
+GENERATE_CANDIDATE_PROMPT = ChatPromptTemplate.from_template(
     """You are a Principal Software Architect.
     
-    You are given a well-defined "Problem Space".
-    Your task is to generate a "Solution Space" containing 3 distinct, viable solution candidates that solve the Problem within the constraints (Invariants).
-
+    You are given a well-defined "Problem Space" and a list of "Existing Candidates" (if any).
+    Your task is to generate ONE new, distinct solution candidate that solves the Problem within the constraints (Invariants).
+    
     Problem Space:
     Context: {context}
     Invariants: {invariants}
     Goal: {goal}
     Problem: {problem}
     Variants: {variants}
+    
+    Existing Candidates (do not repeat these approaches):
+    {existing_candidates}
 
     **Task:**
-    1. Analyze the Problem Space.
-    2. Generate 3 distinct Solution Candidates.
+    Generate 1 distinct Solution Candidate.
     
-    For each Candidate:
-    - **Hypothesis**: A concise statement proposing specific choices for the "Variants" (degrees of freedom) that will resolve the "Problem". (e.g., "By switching from Monolith to Microservices and using async messaging, we resolve the coupling issue.")
+    - **Hypothesis**: A concise statement proposing specific choices for the "Variants" (degrees of freedom) that will resolve the "Problem".
     - **Model**: A detailed technical description of the solution architecture. Describe components, data flow, and technologies.
     - **Reasoning**: A surrogate reasoning argument explaining WHY this model satisfies the Goal and adheres to Invariants. Explain the trade-offs accepted.
 
-    3. **Comparison**: Compare the 3 candidates (Pros/Cons, Complexity, Cost).
-    4. **Recommendation**: Recommend one candidate and explain why.
-    5. **Simplification**: Suggest one way to simplify the recommended solution further (remove a component, relax a constraint, etc.).
+    Output must be structured as a SolutionCandidate object.
+    """
+)
 
-    Output must be structured as a SolutionSpace object.
+COMPARE_SOLUTIONS_PROMPT = ChatPromptTemplate.from_template(
+    """You are a Principal Software Architect.
+    
+    You are given a "Problem Space" and a set of "Solution Candidates".
+    Your task is to compare them and provide a recommendation.
+
+    Problem Space:
+    Context: {context}
+    Invariants: {invariants}
+    Goal: {goal}
+    Problem: {problem}
+    
+    Candidates:
+    {candidates}
+
+    **Task:**
+    1. **Comparison**: Compare the candidates (Pros/Cons, Complexity, Cost).
+    2. **Recommendation**: Recommend one candidate and explain why.
+    3. **Simplification**: Suggest one way to simplify the recommended solution further (remove a component, relax a constraint, etc.).
+
+    Output must be structured as a ComparisonResult object containing comparison, recommendation, and simplification_feedback.
     """
 )

@@ -22,18 +22,26 @@ from workflow_definitions.system_design.functions_companion import (
     extract_problem,
     save_state, 
     check_problem_space,
-    load_workspace_state,
-    extract_problem,
-    save_state, 
-    check_problem_space,
     refine_problem_space,
-    generate_solutions
+    generate_candidate,
+    compare_solutions
 )
 from app.backend.workspace import WorkspaceManager
 
 load_dotenv()
 
 st.set_page_config(page_title="System Design Companion", layout="wide")
+
+# Inject custom CSS to reduce whitespace
+st.markdown("""
+    <style>
+        .block-container {
+            padding-left: 2rem;
+            padding-right: 2rem;
+            max-width: 100%;
+        }
+    </style>
+""", unsafe_allow_html=True)
 
 # --- Session State Init ---
 if "thread_id" not in st.session_state:
@@ -72,11 +80,18 @@ if "app" not in st.session_state:
 if "app_solution" not in st.session_state:
     fn_map_sol = {
         "load_workspace_state": load_workspace_state,
-        "generate_solutions": generate_solutions,
+        "generate_candidate": generate_candidate,
+        "compare_solutions": compare_solutions,
         "save_state": save_state,
     }
     sol_workflow_path = "workflow_definitions/system_design/solution_companion.wirl"
     st.session_state.app_solution = build_pregel_graph(sol_workflow_path, fn_map_sol, checkpointer=MemorySaver())
+
+if "solution_processing" not in st.session_state:
+    st.session_state.solution_processing = False
+
+def start_solution_generation():
+    st.session_state.solution_processing = True
 
 # --- UI Helpers ---
 
@@ -119,14 +134,42 @@ def render_problem_space(ps):
             st.write("_No variants defined_")
 
     st.divider()
-    if st.button("Start Solutioning", type="primary", use_container_width=True):
-        return True
+    
+    # Check if we have reached the limit of 10 solutions
+    # Moved to Solution Space as per user request
     return False
 
 def render_solution_space(ss):
     st.header("Solution Space")
-    if not ss:
-        st.info("Solution space not yet generated.")
+    
+    # Add Solution Button (Top of Solution Space)
+    # We check limit here
+    current_candidates = ss.get("candidates", []) if ss else []
+    
+    # If no solution space yet, we still want to show the button to start?
+    # But usually it starts from Problem Space? 
+    # Actually, the user flow is: Problem defined -> "Add Solution".
+    # If SS is empty, we still want the button here?
+    # Previous logic was: Button in Problem Column triggered it.
+    # Now button is in Solution Column.
+    
+    trigger_solution = False
+    
+    
+    if len(current_candidates) >= 10:
+         st.warning("Maximum of 10 solutions reached.")
+    else:
+        st.button(
+            "Add Solution", 
+            type="primary", 
+            use_container_width=True,
+            on_click=start_solution_generation,
+            disabled=st.session_state.solution_processing
+        )
+
+    if not ss or not current_candidates:
+        if not ss:
+            st.info("Solution space not yet generated.")
         return
 
     candidates = ss.get("candidates", [])
@@ -150,6 +193,8 @@ def render_solution_space(ss):
         
     if ss.get("simplification_feedback"):
         st.info(f"**Simplification Idea:** {ss['simplification_feedback']}")
+
+    return trigger_solution
 
 # --- Main Layout ---
 
@@ -225,24 +270,28 @@ with col_nav:
 
 # --- Column 2: Problem Space ---
 with col_prob:
-    should_solve = render_problem_space(ps)
-    if should_solve:
-        with st.spinner("Generating Solution Space..."):
+    render_problem_space(ps)
+
+# --- Column 3: Solution Space ---
+with col_sol:
+    render_solution_space(ss)
+
+if st.session_state.solution_processing:
+    with col_nav:
+        with st.spinner("Thinking..."):
             inputs = {
-                "chat_input": "Start Solutioning", # Dummy input
+                "chat_input": "Add Solution", 
                 "workspace_id": st.session_state.current_workspace_id,
                 "version_id": st.session_state.current_version_id
             }
             config = {"configurable": {"thread_id": st.session_state.thread_id}}
             try:
                 result = st.session_state.app_solution.invoke(inputs, config)
+                st.session_state.solution_processing = False # Reset processing state
                 if result and result.get("SaveState.final_version_id"):
-                     st.session_state.current_version_id = result["SaveState.final_version_id"]
-                     st.rerun()
+                        st.session_state.current_version_id = result["SaveState.final_version_id"]
+                        st.rerun()
             except Exception as e:
-                st.error(f"Error generating solutions: {e}")
-
-# --- Column 3: Solution Space ---
-with col_sol:
-    render_solution_space(ss)
+                st.session_state.solution_processing = False # Ensure reset on error
+                st.error(f"Error generating solution: {e}")
 

@@ -64,9 +64,10 @@ class WorkspaceManager:
 
     def list_versions(self, workspace_id: str) -> List[str]:
         ws_dir = self._get_workspace_dir(workspace_id)
-        # return sorted version IDs (assuming timestamps or sequential)
-        # simplified: just return filenames without extension
-        return sorted([f.stem for f in ws_dir.glob("*.json")])
+        # return sorted version IDs by modification time
+        files = list(ws_dir.glob("*.json"))
+        files.sort(key=lambda f: f.stat().st_mtime)
+        return [f.stem for f in files]
 
     def save_workspace(self, workspace: Workspace) -> str:
         """Saves workspace to markdown file. Returns file path."""

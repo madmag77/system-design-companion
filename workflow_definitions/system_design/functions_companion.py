@@ -8,7 +8,8 @@ from workflow_definitions.system_design.prompts_companion import (
     EXTRACT_PROBLEM_PROMPT,
     CHECK_PROBLEM_SPACE_PROMPT,
     REFINE_PROBLEM_SPACE_PROMPT,
-    GENERATE_SOLUTIONS_PROMPT
+    GENERATE_CANDIDATE_PROMPT,
+    COMPARE_SOLUTIONS_PROMPT
 )
 
 logger = logging.getLogger(__name__)
@@ -140,24 +141,102 @@ def refine_problem_space(current_problem: dict, chat_input: str, observations: L
         "has_changes": previous_has_changes or refine_changes
     }
 
-def generate_solutions(problem_space: dict, config: dict = None) -> dict:
+class ComparisonResult(BaseModel):
+    analysis: str
+    recommendation: str
+    simplification_feedback: str
+
+def generate_candidate(problem_space: dict, solution_space: dict = None, config: dict = None) -> dict:
+    logger.info("generate_candidate called")
     llm = get_llm(config)
-    structured_llm = llm.with_structured_output(SolutionSpace)
+    structured_llm = llm.with_structured_output(SolutionCandidate)
     
-    chain = GENERATE_SOLUTIONS_PROMPT | structured_llm
+    chain = GENERATE_CANDIDATE_PROMPT | structured_llm
     
+    # Extract existing candidates
+    existing_candidates = solution_space.get("candidates", []) if solution_space else []
+    logger.info(f"Existing candidates count: {len(existing_candidates)}")
+    
+    # Format existing candidates for context
+    existing_summary = ""
+    if existing_candidates:
+        for idx, c in enumerate(existing_candidates):
+            existing_summary += f"\nCandidate {idx+1}: {c.get('hypothesis', '')} | {c.get('model', '')[:100]}..."
+    else:
+        existing_summary = "None"
+
     inputs = {
         "context": problem_space.get("context", ""),
         "invariants": problem_space.get("invariants", []),
         "goal": problem_space.get("goal", ""),
         "problem": problem_space.get("problem", ""),
-        "variants": problem_space.get("variants", [])
+        "variants": problem_space.get("variants", []),
+        "existing_candidates": existing_summary
     }
     
-    result: SolutionSpace = chain.invoke(inputs)
+    try:
+        logger.info("Invoking LLM for generate_candidate")
+        result: SolutionCandidate = chain.invoke(inputs)
+        logger.info(f"LLM returned candidate: {result.hypothesis[:50]}...")
+    except Exception as e:
+        logger.error(f"Error in generate_candidate LLM invoke: {e}")
+        raise e
+    
+    # Assign ID based on existing count
+    result.id = len(existing_candidates) + 1
+    
+    ret = {
+        "candidate": result.model_dump()
+    }
+    logger.info(f"generate_candidate returning dict keys: {ret.keys()}")
+    return ret
+
+def compare_solutions(problem_space: dict, solution_space: dict = None, candidate: dict = None, config: dict = None) -> dict:
+    logger.info(f"compare_solutions called. Has candidate: {candidate is not None}")
+    
+    # Combine old candidates and new candidate
+    candidates = solution_space.get("candidates", []) if solution_space else []
+    if candidate:
+        candidates.append(candidate)
+    
+    logger.info(f"Total candidates to compare: {len(candidates)}")
+        
+    if not candidates:
+        logger.warning("No candidates to compare, returning empty dict")
+        return {}
+
+    llm = get_llm(config)
+    structured_llm = llm.with_structured_output(ComparisonResult)
+    
+    chain = COMPARE_SOLUTIONS_PROMPT | structured_llm
+    
+    # Format candidates
+    candidates_text = ""
+    for c in candidates:
+        candidates_text += f"\n-- Candidate {c['id']} --\nHypothesis: {c['hypothesis']}\nModel: {c['model']}\nReasoning: {c['reasoning']}\n"
+
+    inputs = {
+        "context": problem_space.get("context", ""),
+        "invariants": problem_space.get("invariants", []),
+        "goal": problem_space.get("goal", ""),
+        "problem": problem_space.get("problem", ""),
+        "candidates": candidates_text
+    }
+    
+    result: ComparisonResult = chain.invoke(inputs)
+    
+    # Construct full SolutionSpace dict
+    new_solution_space = {
+        "candidates": candidates,
+        "comparison": {
+            "analysis": result.analysis,
+            "recommendation": result.recommendation
+        },
+        "simplification_feedback": result.simplification_feedback
+    }
     
     return {
-        "solution_space": result.model_dump()
+        "solution_space": new_solution_space
     }
 
 
