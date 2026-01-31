@@ -100,6 +100,25 @@ def render_workspace_view(ws_data):
         st.info("No workspace data yet.")
         return
 
+def run_problem_workflow(prompt, remove_solutions=True):
+    with st.spinner("Refining Problem Space..."):
+        inputs = {
+            "chat_input": prompt,
+            "workspace_id": st.session_state.current_workspace_id,
+            "version_id": st.session_state.current_version_id,
+            "remove_solutions": remove_solutions
+        }
+        config = {"configurable": {"thread_id": st.session_state.thread_id}}
+        
+        try:
+            result = st.session_state.app.invoke(inputs, config)
+            if result and result.get("SaveState.final_version_id"):
+                    st.session_state.current_version_id = result["SaveState.final_version_id"]
+                    return True # Signal success
+        except Exception as e:
+            st.error(f"Error: {e}")
+    return False
+
 # --- UI Renderers ---
 
 def render_problem_space(ps):
@@ -238,35 +257,57 @@ with col_nav:
             st.markdown(msg["content"])
             
     # Chat Input
-    if prompt := st.chat_input("Input..."):
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
+    # Chat Input & Confirmation Logic
+    
+    if "confirm_solution_removal" not in st.session_state:
+        st.session_state.confirm_solution_removal = None
+    if "pending_chat_input" not in st.session_state:
+        st.session_state.pending_chat_input = None
+
+    if st.session_state.confirm_solution_removal == "pending":
+        with st.container(border=True):
+            st.warning("Solution Space exists!")
+            st.write("Updating the problem space usually requires clearing existing solutions.")
+            st.write(f"**Input:** {st.session_state.pending_chat_input}")
             
-        # Run Workflow (Problem Space)
-        # Note: If solution space is active, we might want to switch workflow? 
-        # For now, adhering to instruction: "new workflow... run. don't amend current problem space" 
-        # But this chat input is general. If user is in solutioning, maybe we shouldn't run problem extraction?
-        # User said: "Once use tap a button instead of writing comments, we should fix the problem space and switch to solutioning workflow."
-        # This implies chat might submit to different workflows depending on state. 
-        # For this iteration, I'll keep chat bound to Problem Space workflow UNLESS we strictly switch modes.
-        # But for now, "Start Solutioning" button triggers generation, chat triggers refinement.
-        
-        with st.spinner("Refining Problem Space..."):
-            inputs = {
-                "chat_input": prompt,
-                "workspace_id": st.session_state.current_workspace_id,
-                "version_id": st.session_state.current_version_id
-            }
-            config = {"configurable": {"thread_id": st.session_state.thread_id}}
+            c1, c2 = st.columns(2)
+            with c1:
+                if st.button("Remove Solutions & Update", type="primary", use_container_width=True):
+                    success = run_problem_workflow(st.session_state.pending_chat_input, remove_solutions=True)
+                    st.session_state.confirm_solution_removal = None
+                    st.session_state.pending_chat_input = None
+                    if success:
+                        st.rerun()
+            with c2:
+                if st.button("Keep Solutions & Update", use_container_width=True):
+                    success = run_problem_workflow(st.session_state.pending_chat_input, remove_solutions=False)
+                    st.session_state.confirm_solution_removal = None
+                    st.session_state.pending_chat_input = None
+                    if success:
+                        st.rerun()
             
-            try:
-                result = st.session_state.app.invoke(inputs, config)
-                if result and result.get("SaveState.final_version_id"):
-                     st.session_state.current_version_id = result["SaveState.final_version_id"]
-                     st.rerun()
-            except Exception as e:
-                st.error(f"Error: {e}")
+            if st.button("Cancel", use_container_width=True):
+                st.session_state.confirm_solution_removal = None
+                st.session_state.pending_chat_input = None
+                st.rerun()
+
+    else:
+        if prompt := st.chat_input("Input..."):
+            st.session_state.messages.append({"role": "user", "content": prompt})
+            with st.chat_message("user"):
+                st.markdown(prompt)
+                
+            # Check if solution space exists
+            has_solutions = ss is not None and len(ss.get("candidates", [])) > 0
+            
+            if has_solutions:
+                st.session_state.confirm_solution_removal = "pending"
+                st.session_state.pending_chat_input = prompt
+                st.rerun()
+            else:
+                success = run_problem_workflow(prompt, remove_solutions=True)
+                if success:
+                    st.rerun()
 
 # --- Column 2: Problem Space ---
 with col_prob:

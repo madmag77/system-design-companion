@@ -3,6 +3,7 @@ workflow SystemDesignCompanion {
     String chat_input
     String workspace_id
     String version_id
+    Bool remove_solutions
   }
   
   outputs {
@@ -72,6 +73,9 @@ workflow SystemDesignCompanion {
           Record problem_space = RefineProblemSpace.new_problem_space
           String workspace_id = workspace_id
           Bool has_changes = RefineProblemSpace.has_changes
+          
+          Record solution_space = LoadWorkspace.solution_space
+          Bool remove_solutions = remove_solutions
       }
       outputs {
           String final_version_id

@@ -20,7 +20,7 @@ def get_llm(config: dict = None):
         model = config.get("model", model)
     return ChatOllama(model=model, temperature=0.1)
 
-def save_state(problem_space: dict, workspace_id: str, has_changes: bool = False, solution_space: dict = None, config: dict = None) -> dict:
+def save_state(problem_space: dict, workspace_id: str, has_changes: bool = False, solution_space: dict = None, remove_solutions: bool = False, config: dict = None) -> dict:
     if not workspace_id or not problem_space:
         logger.warning("save_state missing inputs")
         return {}
@@ -30,10 +30,44 @@ def save_state(problem_space: dict, workspace_id: str, has_changes: bool = False
             "final_version_id": workspace_id
         }
     
-    # Check if we are adding a solution space to a workspace that doesn't need problem space update
-    # In this design, we always pass problem_space. 
-    # If solution_space is generated, we treat it as a change.
+    # Handle solution space logic
+    # If remove_solutions is True (default), we clear solution_space
+    # unless we are in the solution workflow (where solution_space is newly generated).
+    # But this function is used by 'companion.wirl' (Problem Space flow) AND 'solution_companion.wirl' (Solution flow)?
+    # We need to be careful.
+    # In solution flow, 'remove_solutions' likely won't be passed or False.
+    # Actually, solution flow calls save_state too?
+    # Let's check 'functions_companion.py' imports again. 
+    # Yes, one save_state shared.
     
+    # Logic:
+    # If remove_solutions is True, we FORCE solution_space to None (even if passed).
+    # BUT wait, update_workspace takes solution_space.
+    # If we are in Problem Space flow:
+    #   Old solution_space is passed (from LoadWorkspace).
+    #   If remove_solutions=True -> ss = None.
+    #   If remove_solutions=False -> ss = Old solution_space.
+    
+    if remove_solutions:
+         # Only clear if we are NOT passing a NEW solution space?
+         # If this function is called from Solution Workflow, solution_space is NEWLY generated.
+         # The 'remove_solutions' flag should probably default to False in Python, but True in WIRL (companion.wirl)?
+         # Or better: check if solution_space is passed.
+         
+         # The issue: In Problem Space flow, solution_space passed is OLD.
+         # In Solution Space flow, solution_space passed is NEW.
+         # We need to distinguish.
+         
+         # Assuming 'remove_solutions' is mainly a flag from the UI/Problem Workflow.
+         # If I don't pass it in Solution Workflow, it defaults to False (safe).
+         # So change default to False?
+         # If default is False, then existing calls (Solution Workflow) work.
+         # In Companion Wirl, I will pass it explicitly.
+         pass # Handled below
+         
+    if remove_solutions:
+        solution_space = None
+
     save_res = update_workspace(workspace_id, problem_space, solution_space, config)
     new_version_id = save_res.get("new_version_id")
     
@@ -47,6 +81,17 @@ def load_workspace_state(workspace_id: str, version_id: str, config: dict = None
     manager = WorkspaceManager()
     try:
         ws = manager.load_workspace(workspace_id, version_id)
+        
+        # Sanitize solution space to remove duplicates if any exist
+        if ws.solution_space and ws.solution_space.candidates:
+            seen_ids = set()
+            unique_candidates = []
+            for cand in ws.solution_space.candidates:
+                if cand.id not in seen_ids:
+                    unique_candidates.append(cand)
+                    seen_ids.add(cand.id)
+            ws.solution_space.candidates = unique_candidates
+            
         return {
             "problem_space": ws.problem_space.model_dump(),
             "solution_space": ws.solution_space.model_dump() if ws.solution_space else None
@@ -182,8 +227,14 @@ def generate_candidate(problem_space: dict, solution_space: dict = None, config:
         logger.error(f"Error in generate_candidate LLM invoke: {e}")
         raise e
     
-    # Assign ID based on existing count
-    result.id = len(existing_candidates) + 1
+    # Assign ID based on max existing ID + 1 to handle gaps
+    next_id = 1
+    if existing_candidates:
+        # existing_candidates are dicts here (model_dump output)
+        max_id = max((c.get('id', 0) for c in existing_candidates), default=0)
+        next_id = max_id + 1
+        
+    result.id = next_id
     
     ret = {
         "candidate": result.model_dump()
@@ -194,8 +245,14 @@ def generate_candidate(problem_space: dict, solution_space: dict = None, config:
 def compare_solutions(problem_space: dict, solution_space: dict = None, candidate: dict = None, config: dict = None) -> dict:
     logger.info(f"compare_solutions called. Has candidate: {candidate is not None}")
     
+    
     # Combine old candidates and new candidate
-    candidates = solution_space.get("candidates", []) if solution_space else []
+    # Use deepcopy to avoid mutating the inputs which might be shared references in the workflow state
+    import copy
+    candidates = []
+    if solution_space and "candidates" in solution_space:
+        candidates = copy.deepcopy(solution_space["candidates"])
+    
     if candidate:
         candidates.append(candidate)
     
