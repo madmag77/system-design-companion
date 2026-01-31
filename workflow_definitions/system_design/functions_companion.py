@@ -16,9 +16,11 @@ logger = logging.getLogger(__name__)
 
 def get_llm(config: dict = None):
     model = "gemma3:27b"
+    temperature = 0.1
     if config:
         model = config.get("model", model)
-    return ChatOllama(model=model, temperature=0.1)
+        temperature = float(config.get("temperature", temperature))
+    return ChatOllama(model=model, temperature=temperature)
 
 def save_state(problem_space: dict, workspace_id: str, has_changes: bool = False, solution_space: dict = None, remove_solutions: bool = False, config: dict = None) -> dict:
     if not workspace_id or not problem_space:

@@ -111,7 +111,7 @@ REFINE_PROBLEM_SPACE_PROMPT = ChatPromptTemplate.from_template(
 )
 
 GENERATE_CANDIDATE_PROMPT = ChatPromptTemplate.from_template(
-    """You are a Principal Software Architect.
+    """You are a System Design Companion.
     
     You are given a well-defined "Problem Space" and a list of "Existing Candidates" (if any).
     Your task is to generate ONE new, distinct solution candidate that solves the Problem within the constraints (Invariants).
@@ -127,12 +127,19 @@ GENERATE_CANDIDATE_PROMPT = ChatPromptTemplate.from_template(
     {existing_candidates}
 
     **Task:**
-    Generate 1 distinct Solution Candidate.
+    Generate 1 distinct Solution Candidate. Please be very concise. Later on we will dive into details of each candidate.
     
     - **Hypothesis**: A concise statement proposing specific choices for the "Variants" (degrees of freedom) that will resolve the "Problem".
-    - **Model**: A detailed technical description of the solution architecture. Describe components, data flow, and technologies.
-    - **Reasoning**: A surrogate reasoning argument explaining WHY this model satisfies the Goal and adheres to Invariants. Explain the trade-offs accepted.
-
+    - **Model**: Construct "Sparse" (Abstract) Models:
+       - Describe the Logical Data Structure or Algorithm or Concept, NOT specific technologies/vendors.
+       - Bad: "I will use Redis." (Implementation)
+       - Good: "I will use a Distributed Hash Map with TTL." (Structural Model)
+       - The model must be abstract enough to allow reasoning about complexity (O(N)), concurrency, and topology.
+       - The more abstract the model, the easier it can be reasoned about.
+    
+    - **Reasoning**: Use Surrogate Reasoning to derive the behavior of the real system from the properties of your abstract model.
+       - Structure: "Because Model uses a Linked List structure, random access is O(N), which implies the system will time out under load."
+   
     Output must be structured as a SolutionCandidate object.
     """
 )
@@ -141,7 +148,7 @@ COMPARE_SOLUTIONS_PROMPT = ChatPromptTemplate.from_template(
     """You are a Principal Software Architect.
     
     You are given a "Problem Space" and a set of "Solution Candidates".
-    Your task is to compare them and provide a recommendation.
+    Your task is to compare them and provide a recommendation. Please be very concise.
 
     Problem Space:
     Context: {context}
