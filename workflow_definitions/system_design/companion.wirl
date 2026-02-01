@@ -74,7 +74,7 @@ workflow SystemDesignCompanion {
           String workspace_id = workspace_id
           Bool has_changes = RefineProblemSpace.has_changes
           
-          Record solution_space = LoadWorkspace.solution_space
+          Record solution_space = LoadWorkspace.solution_space?
           Bool remove_solutions = remove_solutions
       }
       outputs {
