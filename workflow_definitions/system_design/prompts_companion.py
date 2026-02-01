@@ -167,3 +167,82 @@ COMPARE_SOLUTIONS_PROMPT = ChatPromptTemplate.from_template(
     Output must be structured as a ComparisonResult object containing comparison, recommendation, and simplification_feedback.
     """
 )
+
+EXPAND_CANDIDATE_PROMPT = ChatPromptTemplate.from_template(
+    """You are a Senior System Architect.
+    
+    You are given a "Problem Space" and a high-level "Solution Candidate".
+    Your task is to EXPAND this candidate into a detailed implementation proposal.
+    
+    Problem Space:
+    Context: {context}
+    Invariants: {invariants}
+    Goal: {goal}
+    Problem: {problem}
+    Variants: {variants}
+    
+    Candidate to Expand:
+    Hypothesis: {hypothesis}
+    Model: {model}
+    Reasoning: {reasoning}
+    
+    **Task:**
+    Flesh out the implementation details for this candidate.
+    
+    - **Architecture Diagram Description**: Describe the diagram that would represent this solution.
+    - **Key Components**: List specific components/technologies (e.g. "Kafka", "Postgres", "Redis", "K8s") and their roles.
+    - **Data Flow**: Step-by-step description of how data flows through the system.
+    - **Pros**: Detailed pros.
+    - **Cons**: Detailed cons.
+    - **Estimated Cost**: Rough estimation (High/Medium/Low) and drivers.
+    - **Implementation Complexity**: Estimation and drivers.
+    
+    Output must be structured as an ExpandedCandidate object.
+    """
+)
+
+DEEP_COMPARE_PROMPT = ChatPromptTemplate.from_template(
+    """You are a CTO comparing detailed technical proposals.
+    
+    You are given a "Problem Space" and two or more "Expanded Candidates".
+    Your task is to generate a detailed comparison matrix and analysis to help choose the best one.
+    
+    Problem Space:
+    Goal: {goal}
+    Invariants: {invariants}
+    
+    Expanded Candidates:
+    {expanded_candidates}
+    
+    **Task:**
+    1. **Side-by-Side Analysis**: Compare them on critical dimensions (Scalability, Reliability, Cost, Complexity, Time-to-market).
+    2. **Trade-offs**: Highlight the key trade-offs between them.
+    3. **Recommendation**: Provide a final recommendation with strong justification.
+    
+    Output must be structured as a DeepComparisonResult object.
+    """
+)
+
+FINAL_SOLUTION_PROMPT = ChatPromptTemplate.from_template(
+    """You are a Principal Engineer writing the final Architecture Decision Record (ADR) and System Design Document.
+    
+    Problem Space:
+    Context: {context}
+    Goal: {goal}
+    Problem: {problem}
+    
+    Selected Solution:
+    {selected_solution}
+    
+    **Task:**
+    Write a comprehensive design document for this solution.
+    
+    Content should include:
+    1. **Executive Summary**: The "One Pager" pitch.
+    2. **Detailed Architecture**: Components, interactions, patterns.
+    3. **Implementation Plan**: Phases, milestones, key risks.
+    4. **FAQ**: Anticipate questions and answer them.
+    
+    Output must be structured as a FinalSolutionDocument object.
+    """
+)

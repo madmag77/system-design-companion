@@ -29,14 +29,45 @@ class SolutionCandidate(BaseModel):
     model: str = Field(description="Description of the solution")
     reasoning: str = Field(description="Why this is a solution", default="")
 
+class ExpandedCandidate(BaseModel):
+    id: int = 0
+    hypothesis: str
+    model: str
+    reasoning: str
+    architecture_diagram_description: str
+    key_components: List[str]
+    data_flow: str
+    pros: str
+    cons: str
+    estimated_cost: str
+    implementation_complexity: str
+
 class Comparison(BaseModel):
     analysis: str = Field(description="comparative analysis")
     recommendation: str = Field(description="Recommended choice")
+
+class DeepComparisonResult(BaseModel):
+    analysis: str
+    trade_offs: str
+    recommendation: str
+
+class FinalSolutionDocument(BaseModel):
+    title: str
+    executive_summary: str
+    detailed_architecture: str
+    implementation_plan: str
+    faq: str
 
 class SolutionSpace(BaseModel):
     candidates: List[SolutionCandidate] = Field(default_factory=list)
     comparison: Optional[Comparison] = None
     simplification_feedback: Optional[str] = None
+    
+    # Extended Workflow Fields
+    shortlisted_ids: List[int] = Field(default_factory=list)
+    expanded_candidates: List[ExpandedCandidate] = Field(default_factory=list)
+    deep_comparison: Optional[DeepComparisonResult] = None
+    final_solution: Optional[FinalSolutionDocument] = None
 
 class Workspace(BaseModel):
     id: str

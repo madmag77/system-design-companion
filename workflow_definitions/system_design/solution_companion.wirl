@@ -27,6 +27,16 @@ workflow SolutionDesignCompanion {
           Record problem_space = LoadWorkspace.problem_space
           Record solution_space = LoadWorkspace.solution_space?
       }
+      # Run only if we are in BRAINSTORM phase or no phase (default)
+      # Simulating simple condition via if check in code or just letting it run if requested.
+      # For now, we assume the UI calls specific workflow or we branch here.
+      # WIRL branching logic:
+      # We can use `if` block wrapping nodes if supported, or use `depends_on` with conditions?
+      # Assuming simplified execution where we run ALL relevant nodes?
+      # Actually, if I add new nodes, they will run sequentially if chained.
+      # But we want to run EITHER GenerateCandidate OR ExpandCandidates etc. based on input.
+      # WIRL basic support: All nodes run if their inputs are satisfied?
+      # Or I can make keys optional.
       const {
         model: "gpt-oss:20b"
         temperature: "0.7"
@@ -35,6 +45,13 @@ workflow SolutionDesignCompanion {
           Record candidate
       }
   }
+  
+  # Note: In a real WIRL engine we would have conditional execution. 
+  # Here I will chain them such that they process if inputs are available.
+  # But simpler: The UI calls the specific function via the graph.
+  # Actually the graph runs top to bottom.
+  # Let's add the new nodes.
+  
 
   node CompareSolutions {
       call compare_solutions

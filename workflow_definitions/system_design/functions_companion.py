@@ -2,14 +2,27 @@ import logging
 import json
 from typing import Dict, Any, List
 from langchain_ollama import ChatOllama
-from app.backend.workspace import WorkspaceManager, Workspace, ProblemSpace, SolutionSpace, SolutionCandidate, Comparison
+from app.backend.workspace import (
+    WorkspaceManager, 
+    Workspace, 
+    ProblemSpace, 
+    SolutionSpace, 
+    SolutionCandidate, 
+    Comparison,
+    ExpandedCandidate,
+    DeepComparisonResult,
+    FinalSolutionDocument
+)
 from pydantic import BaseModel
 from workflow_definitions.system_design.prompts_companion import (
     EXTRACT_PROBLEM_PROMPT,
     CHECK_PROBLEM_SPACE_PROMPT,
     REFINE_PROBLEM_SPACE_PROMPT,
     GENERATE_CANDIDATE_PROMPT,
-    COMPARE_SOLUTIONS_PROMPT
+    COMPARE_SOLUTIONS_PROMPT,
+    EXPAND_CANDIDATE_PROMPT,
+    DEEP_COMPARE_PROMPT,
+    FINAL_SOLUTION_PROMPT
 )
 
 logger = logging.getLogger(__name__)
@@ -299,6 +312,125 @@ def compare_solutions(problem_space: dict, solution_space: dict = None, candidat
     }
 
 
+
+
+# --- Extended Workflow Functions ---
+
+def expand_solution_candidates(problem_space: dict, solution_space: dict, selected_ids: List[int], config: dict = None) -> dict:
+    logger.info(f"expand_solution_candidates called with {len(selected_ids) if selected_ids else 0} selected IDs")
+    
+    if not selected_ids:
+        return {"solution_space": solution_space}
+
+    llm = get_llm(config)
+    structured_llm = llm.with_structured_output(ExpandedCandidate)
+    
+    chain = EXPAND_CANDIDATE_PROMPT | structured_llm
+    
+    expanded_results = []
+    
+    candidates = solution_space.get("candidates", []) if solution_space else []
+    # Filter candidates
+    target_candidates = [c for c in candidates if c.get("id") in selected_ids]
+    
+    for cand in target_candidates:
+        inputs = {
+            "context": problem_space.get("context", ""),
+            "invariants": problem_space.get("invariants", []),
+            "goal": problem_space.get("goal", ""),
+            "problem": problem_space.get("problem", ""),
+            "variants": problem_space.get("variants", []),
+            "hypothesis": cand.get("hypothesis", ""),
+            "model": cand.get("model", ""),
+            "reasoning": cand.get("reasoning", "")
+        }
+        try:
+            expanded: ExpandedCandidate = chain.invoke(inputs)
+            expanded.id = cand.get("id", 0)
+            expanded_results.append(expanded.model_dump())
+        except Exception as e:
+            logger.error(f"Error expanding candidate {cand.get('id')}: {e}")
+            
+    import copy
+    new_ss = copy.deepcopy(solution_space) if solution_space else {}
+    new_ss["expanded_candidates"] = expanded_results
+    new_ss["shortlisted_ids"] = selected_ids
+    
+    return {
+        "solution_space": new_ss
+    }
+
+def generate_deep_comparison(problem_space: dict, solution_space: dict, config: dict = None) -> dict:
+    logger.info("generate_deep_comparison called")
+    
+    expanded_candidates = solution_space.get("expanded_candidates", []) if solution_space else []
+    if not expanded_candidates:
+        return {"solution_space": solution_space}
+
+    llm = get_llm(config)
+    structured_llm = llm.with_structured_output(DeepComparisonResult)
+    
+    chain = DEEP_COMPARE_PROMPT | structured_llm
+    
+    candidates_text = ""
+    for c in expanded_candidates:
+        candidates_text += f"\n-- Candidate {c['id']} --\nHypothesis: {c['hypothesis']}\nComponents: {c['key_components']}\nPros: {c['pros']}\nCons: {c['cons']}\nCost: {c['estimated_cost']}\nComplexity: {c['implementation_complexity']}\n"
+    
+    inputs = {
+        "goal": problem_space.get("goal", ""),
+        "invariants": problem_space.get("invariants", []),
+        "expanded_candidates": candidates_text
+    }
+    
+    result: DeepComparisonResult = chain.invoke(inputs)
+    
+    import copy
+    new_ss = copy.deepcopy(solution_space) if solution_space else {}
+    new_ss["deep_comparison"] = result.model_dump()
+    
+    return {
+        "solution_space": new_ss
+    }
+
+def generate_final_solution_document(problem_space: dict, solution_space: dict, final_selected_id: int = None, config: dict = None) -> dict:
+    logger.info(f"generate_final_solution_document called with ID: {final_selected_id}")
+    llm = get_llm(config)
+    structured_llm = llm.with_structured_output(FinalSolutionDocument)
+    
+    chain = FINAL_SOLUTION_PROMPT | structured_llm
+    
+    expanded_candidates = solution_space.get("expanded_candidates", [])
+    if not expanded_candidates:
+         return {"solution_space": solution_space}
+
+    selected_solution = None
+    if final_selected_id is not None:
+        for c in expanded_candidates:
+            if c['id'] == final_selected_id:
+                selected_solution = c
+                break
+    
+    if not selected_solution:
+        # Fallback to recommendation or first
+        logger.warning("Final selected ID not found or not provided, defaulting to first candidate.")
+        selected_solution = expanded_candidates[0]
+    
+    inputs = {
+        "context": problem_space.get("context", ""),
+        "goal": problem_space.get("goal", ""),
+        "problem": problem_space.get("problem", ""),
+        "selected_solution": json.dumps(selected_solution, indent=2)
+    }
+    
+    result: FinalSolutionDocument = chain.invoke(inputs)
+    
+    import copy
+    new_ss = copy.deepcopy(solution_space) if solution_space else {}
+    new_ss["final_solution"] = result.model_dump()
+    
+    return {
+        "solution_space": new_ss
+    }
 
 def update_workspace(workspace_id: str, problem_space: dict, solution_space: dict = None, config: dict = None, **kwargs) -> dict:
     logger.info(f"update_workspace called. ProblemSpace: {bool(problem_space)}, SolutionSpace: {bool(solution_space)}")

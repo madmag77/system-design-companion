@@ -12,7 +12,6 @@ logger = logging.getLogger(__name__)
 
 # Add path for reference implementations
 sys.path.insert(0, str(Path(__file__).parent.parent))
-# Assuming wirl packages are installed in environment, else add paths like before
 
 from wirl_pregel_runner.pregel_graph_builder import build_pregel_graph
 from langgraph.checkpoint.memory import MemorySaver
@@ -24,7 +23,10 @@ from workflow_definitions.system_design.functions_companion import (
     check_problem_space,
     refine_problem_space,
     generate_candidate,
-    compare_solutions
+    compare_solutions,
+    expand_solution_candidates,
+    generate_deep_comparison,
+    generate_final_solution_document
 )
 from app.backend.workspace import WorkspaceManager
 
@@ -32,13 +34,17 @@ load_dotenv()
 
 st.set_page_config(page_title="System Design Companion", layout="wide")
 
-# Inject custom CSS to reduce whitespace
+# Inject custom CSS
 st.markdown("""
     <style>
         .block-container {
             padding-left: 2rem;
             padding-right: 2rem;
             max-width: 100%;
+        }
+        [data-testid="stSidebar"] {
+            min-width: 25vw !important;
+            max-width: 25vw !important;
         }
     </style>
 """, unsafe_allow_html=True)
@@ -66,6 +72,7 @@ if "current_version_id" not in st.session_state:
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
+# --- Workflow Graphs ---
 if "app" not in st.session_state:
     fn_map = {
         "load_workspace_state": load_workspace_state,
@@ -87,18 +94,52 @@ if "app_solution" not in st.session_state:
     sol_workflow_path = "workflow_definitions/system_design/solution_companion.wirl"
     st.session_state.app_solution = build_pregel_graph(sol_workflow_path, fn_map_sol, checkpointer=MemorySaver())
 
+if "app_deep_dive" not in st.session_state:
+    fn_map_dd = {
+        "load_workspace_state": load_workspace_state,
+        "expand_solution_candidates": expand_solution_candidates,
+        "generate_deep_comparison": generate_deep_comparison,
+        "save_state": save_state,
+    }
+    dd_workflow_path = "workflow_definitions/system_design/deep_dive_companion.wirl"
+    st.session_state.app_deep_dive = build_pregel_graph(dd_workflow_path, fn_map_dd, checkpointer=MemorySaver())
+
+if "app_final" not in st.session_state:
+    fn_map_final = {
+        "load_workspace_state": load_workspace_state,
+        "generate_final_solution_document": generate_final_solution_document,
+        "save_state": save_state,
+    }
+    final_workflow_path = "workflow_definitions/system_design/final_solution_companion.wirl"
+    st.session_state.app_final = build_pregel_graph(final_workflow_path, fn_map_final, checkpointer=MemorySaver())
+
+
+if "pending_solution_step" not in st.session_state:
+    st.session_state.pending_solution_step = None
+
 if "solution_processing" not in st.session_state:
     st.session_state.solution_processing = False
 
-def start_solution_generation():
+# --- Helpers ---
+
+def run_solution_step(inputs, workflow_type="generate"):
+    # workflow_type: 'generate', 'deep_dive', 'final'
+    inputs["_workflow_type"] = workflow_type # Store type for execution loop
+    st.session_state.pending_solution_step = inputs
     st.session_state.solution_processing = True
 
-# --- UI Helpers ---
-
-def render_workspace_view(ws_data):
-    if not ws_data:
-        st.info("No workspace data yet.")
-        return
+def get_workflow_phase(ss):
+    if not ss:
+        return "BRAINSTORM"
+    if ss.get("final_solution"):
+        return "FINAL"
+    if ss.get("deep_comparison"):
+        return "COMPARISON"
+    if ss.get("expanded_candidates"):
+        return "DEEP_DIVE"
+    if ss.get("shortlisted_ids"):
+        return "SHORTLIST" 
+    return "BRAINSTORM"
 
 def run_problem_workflow(prompt, remove_solutions=True):
     with st.spinner("Refining Problem Space..."):
@@ -117,18 +158,21 @@ def run_problem_workflow(prompt, remove_solutions=True):
                     return True # Signal success
         except Exception as e:
             st.error(f"Error: {e}")
+            logger.exception("Error running problem workflow")
     return False
+
+def get_shortlisted_ids(ss):
+    """Helper to get selected IDs from session state based on checkbox keys"""
+    ids = []
+    if ss and ss.get("candidates"):
+        for c in ss["candidates"]:
+            if st.session_state.get(f"select_{c['id']}"):
+                ids.append(c['id'])
+    return ids
 
 # --- UI Renderers ---
 
-def render_problem_space(ps):
-    st.header("Problem Space")
-
-    # Start Solutioning Trigger
-    # Placed at top or bottom? User said "below the problem definition" in my plan, but user didn't specify position in request.
-    # "Once use tap a button instead of writing comments, we should fix the problem space and switch to solutioning workflow."
-    # I'll put it at the top for visibility or bottom. Bottom seems more logical after reading.
-
+def render_problem_space_content(ps):
     st.subheader("Context")
     st.write(ps.get("context") or "_No context defined_")
     
@@ -152,85 +196,219 @@ def render_problem_space(ps):
         else:
             st.write("_No variants defined_")
 
+def render_problem_space(ps):
+    # Wrapper if needed, for legacy compatibility
+    st.header("Problem Space")
+    render_problem_space_content(ps)
     st.divider()
-    
-    # Check if we have reached the limit of 10 solutions
-    # Moved to Solution Space as per user request
-    return False
 
-def render_solution_space(ss):
-    st.header("Solution Space")
-    
-    # Add Solution Button (Top of Solution Space)
-    # We check limit here
+def render_brainstorming_candidates(ss, allow_add=True):
     current_candidates = ss.get("candidates", []) if ss else []
     
-    # If no solution space yet, we still want to show the button to start?
-    # But usually it starts from Problem Space? 
-    # Actually, the user flow is: Problem defined -> "Add Solution".
-    # If SS is empty, we still want the button here?
-    # Previous logic was: Button in Problem Column triggered it.
-    # Now button is in Solution Column.
-    
-    trigger_solution = False
-    
-    
-    if len(current_candidates) >= 10:
-         st.warning("Maximum of 10 solutions reached.")
-    else:
-        st.button(
-            "Add Solution", 
-            type="primary", 
-            use_container_width=True,
-            on_click=start_solution_generation,
-            disabled=st.session_state.solution_processing
-        )
+    if allow_add:
+        if len(current_candidates) >= 10:
+                st.warning("Maximum of 10 solutions reached.")
+        else:
+            st.button(
+                "Add Solution", 
+                type="primary", 
+                use_container_width=True,
+                on_click=lambda: run_solution_step({}, workflow_type="generate"),
+                disabled=st.session_state.solution_processing
+            )
 
     if not ss or not current_candidates:
         if not ss:
             st.info("Solution space not yet generated.")
         return
 
-    candidates = ss.get("candidates", [])
-    if not candidates:
-        st.write("No candidates found.")
-        return
-
-    tabs = st.tabs([f"Option {c['id']}" for c in candidates])
+    tabs = st.tabs([f"Option {c['id']}" for c in current_candidates])
     
     for i, tab in enumerate(tabs):
         with tab:
-            c = candidates[i]
+            c = current_candidates[i]
             st.markdown(f"**Hypothesis:** {c['hypothesis']}")
-            st.markdown(f"**Model:**\n{c['model']}")
+            st.markdown(f"**Model:**\n{str(c.get('model', ''))}")
             st.markdown(f"**Reasoning:**\n{c.get('reasoning', '')}")
 
     if ss.get("comparison"):
         st.subheader("Comparison")
-        st.markdown(ss["comparison"]["analysis"])
-        st.markdown(f"**Recommendation:** {ss['comparison']['recommendation']}")
+        st.markdown(ss["comparison"].get("analysis", ""))
+        st.markdown(f"**Recommendation:** {ss['comparison'].get('recommendation', '')}")
         
     if ss.get("simplification_feedback"):
         st.info(f"**Simplification Idea:** {ss['simplification_feedback']}")
 
-    return trigger_solution
+def render_shortlist_view(ss):
+    st.header("Shortlist Candidates")
+    st.write("Select 1-3 candidates to explore in depth.")
+    
+    if not ss:
+        st.write("No candidates to shortlist.")
+        return
+        
+    candidates = ss.get("candidates", [])
+    if not candidates:
+        st.write("No candidates to shortlist.")
+        return
 
-# --- Main Layout ---
+    # Display Candidates with Checkboxes
+    selected_ids = get_shortlisted_ids(ss)
+    
+    cols = st.columns(2)
+    for i, c in enumerate(candidates):
+        with cols[i % 2]:
+            with st.container(border=True):
+                st.markdown(f"**Option {c['id']}**")
+                st.write(c['hypothesis'])
+                
+                # Check restrictions
+                is_selected = c['id'] in selected_ids
+                disabled = len(selected_ids) >= 3 and not is_selected
+                
+                if st.checkbox("Select", key=f"select_{c['id']}", disabled=disabled):
+                    pass # State updated auto
+                    
+    st.caption(f"Selected: {len(selected_ids)}/3")
 
-# Remove default sidebar and use columns
-# Layout: [Menu+Chat (20%)] [Problem Space (40%)] [Solution Space (40%)]
-col_nav, col_prob, col_sol = st.columns([2, 4, 4])
+def render_deep_dive_view(ss, mode="expand"):
+    # mode: 'expand' or 'compare'
+    
+    if mode == "expand":
+        st.header("Deep Dive Analysis")
+        
+        selected_ids = get_shortlisted_ids(ss)
+        
+        if not selected_ids:
+            st.warning("Please go to 'Shortlist' tab and select 1-3 candidates.")
+            return
 
-# --- Fetch Current State for Rendering ---
+        expanded = ss.get("expanded_candidates", [])
+        expanded_ids = [c['id'] for c in expanded]
+        
+        # Check if selection matches data
+        is_out_of_sync = set(selected_ids) != set(expanded_ids)
+        
+        # Always show button if missing or out of sync
+        if not expanded or is_out_of_sync:
+            btn_label = "Run Deep Dive" if not expanded else "Update Deep Dive (Selection Changed)"
+            if st.button(btn_label, type="primary"):
+                 run_solution_step({"selected_candidate_ids": selected_ids}, workflow_type="deep_dive")
+            
+            if not expanded:
+                return
+            st.divider()
+
+        # If we have results, display them
+        tabs = st.tabs([f"Option {c['id']}" for c in expanded])
+        for i, t in enumerate(tabs):
+            with t:
+                c = expanded[i]
+                st.subheader(c['hypothesis'])
+                
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.markdown("#### Components")
+                    for k in c.get('key_components', []):
+                        st.markdown(f"- {k}")
+                    st.markdown("#### Pros")
+                    st.write(str(c.get('pros')))
+                with c2:
+                    st.markdown("#### Stats")
+                    st.write(f"**Cost:** {c.get('estimated_cost')}")
+                    st.write(f"**Complexity:** {c.get('implementation_complexity')}")
+                    st.markdown("#### Cons")
+                    st.write(str(c.get('cons')))
+                    
+                st.markdown("#### Architecture Description")
+                st.write(c.get('architecture_diagram_description'))
+                
+    elif mode == "compare":
+        st.header("Deep Comparison")
+        
+        # Check if Deep Dive is done
+        if not ss.get("expanded_candidates"):
+             st.warning("Please complete Deep Dive first.")
+             return
+
+        comp = ss.get("deep_comparison")
+        if not comp:
+             if st.button("Run Comparison", type="primary"):
+                 run_solution_step({"current_phase": "DEEP_DIVE"}, workflow_type="deep_dive") 
+             return
+             
+        st.markdown(str(comp.get('analysis')))
+        st.markdown(f"### Recommendation: {comp.get('recommendation')}")
+        st.info(f"Trade-offs: {comp.get('trade_offs')}")
+
+def render_final_view(ss):
+    st.header("Final Architecture Definition")
+    
+    # Check if comparison is done (optional but good flow)
+    if not ss.get("deep_comparison"):
+        st.warning("Please complete Deep Comparison first.")
+        return
+        
+    doc = ss.get("final_solution")
+    
+    if not doc:
+        # Show configuration for Final Gen
+        expanded = ss.get("expanded_candidates", [])
+        opts = [c['id'] for c in expanded]
+        
+        col1, col2 = st.columns([3, 1])
+        with col1:
+             # Default to first valid option if available, else 0
+            idx = 0
+            if opts:
+                 final_id = st.selectbox("Select Solution to Finalize", opts)
+            else:
+                 st.write("No solutions to finalize.")
+                 return
+        with col2:
+            st.write("")
+            st.write("")
+            if st.button("Generate Final SDD", type="primary"):
+                 run_solution_step({"current_phase": "FINAL", "final_selected_id": final_id}, workflow_type="final")
+        return
+        
+    st.title(doc.get("title", "System Design Document"))
+    st.markdown("### Executive Summary")
+    st.write(doc.get("executive_summary"))
+    
+    with st.expander("Detailed Architecture", expanded=True):
+        st.write(doc.get("detailed_architecture"))
+        
+    with st.expander("Implementation Plan", expanded=True):
+        st.write(doc.get("implementation_plan"))
+        
+    with st.expander("FAQ", expanded=False):
+        st.write(doc.get("faq"))
+        
+    if st.button("Regenerate"):
+        # Reset final?
+        run_solution_step({"current_phase": "FINAL", "final_selected_id": ss.get("shortlisted_ids", [1])[0]}, workflow_type="final")
+
+
+# --- Main Execution ---
+
+# Fetch Current State
 current_ws_data = load_workspace_state(st.session_state.current_workspace_id, st.session_state.current_version_id)
 ps = current_ws_data.get("problem_space", {})
 ss = current_ws_data.get("solution_space", {})
 
-# --- Column 1: Menu & Chat ---
-with col_nav:
+phase = get_workflow_phase(ss)
+
+# Sidebar
+with st.sidebar:
     st.subheader("Workspace")
     workspaces = st.session_state.workspace_manager.list_workspaces()
-    selected_ws = st.selectbox("Select", workspaces, index=workspaces.index(st.session_state.current_workspace_id) if st.session_state.current_workspace_id in workspaces else None, label_visibility="collapsed")
+    
+    index = 0
+    if st.session_state.current_workspace_id in workspaces:
+         index = workspaces.index(st.session_state.current_workspace_id)
+         
+    selected_ws = st.selectbox("Select", workspaces, index=index, label_visibility="collapsed")
     
     if selected_ws and selected_ws != st.session_state.current_workspace_id:
         st.session_state.current_workspace_id = selected_ws
@@ -246,8 +424,7 @@ with col_nav:
             st.session_state.current_workspace_id = new_id
             st.session_state.current_version_id = "v1"
             st.rerun()
-    
-    st.caption(f"ID: {st.session_state.current_workspace_id[:8]}... v{st.session_state.current_version_id}")
+            
     st.divider()
     
     st.header("Chat")
@@ -257,82 +434,99 @@ with col_nav:
             st.markdown(msg["content"])
             
     # Chat Input
-    # Chat Input & Confirmation Logic
-    
     if "confirm_solution_removal" not in st.session_state:
         st.session_state.confirm_solution_removal = None
     if "pending_chat_input" not in st.session_state:
         st.session_state.pending_chat_input = None
 
-    if st.session_state.confirm_solution_removal == "pending":
-        with st.container(border=True):
-            st.warning("Solution Space exists!")
-            st.write("Updating the problem space usually requires clearing existing solutions.")
-            st.write(f"**Input:** {st.session_state.pending_chat_input}")
-            
-            c1, c2 = st.columns(2)
-            with c1:
-                if st.button("Remove Solutions & Update", type="primary", use_container_width=True):
-                    success = run_problem_workflow(st.session_state.pending_chat_input, remove_solutions=True)
-                    st.session_state.confirm_solution_removal = None
-                    st.session_state.pending_chat_input = None
-                    if success:
-                        st.rerun()
-            with c2:
-                if st.button("Keep Solutions & Update", use_container_width=True):
-                    success = run_problem_workflow(st.session_state.pending_chat_input, remove_solutions=False)
-                    st.session_state.confirm_solution_removal = None
-                    st.session_state.pending_chat_input = None
-                    if success:
-                        st.rerun()
-            
-            if st.button("Cancel", use_container_width=True):
-                st.session_state.confirm_solution_removal = None
-                st.session_state.pending_chat_input = None
-                st.rerun()
-
-    else:
-        if prompt := st.chat_input("Input..."):
+    if phase != "BRAINSTORM":
+        st.info(f"Phase: {phase}. Chat updates to Problem Space might invalidate solutions.")
+    
+    if prompt := st.chat_input("Input..."):
             st.session_state.messages.append({"role": "user", "content": prompt})
             with st.chat_message("user"):
                 st.markdown(prompt)
                 
-            # Check if solution space exists
             has_solutions = ss is not None and len(ss.get("candidates", [])) > 0
             
-            if has_solutions:
+            if has_solutions and phase == "BRAINSTORM":
                 st.session_state.confirm_solution_removal = "pending"
                 st.session_state.pending_chat_input = prompt
                 st.rerun()
+            elif phase != "BRAINSTORM":
+                success = run_problem_workflow(prompt, remove_solutions=False)
+                if success:
+                    st.rerun()
             else:
                 success = run_problem_workflow(prompt, remove_solutions=True)
                 if success:
                     st.rerun()
 
-# --- Column 2: Problem Space ---
-with col_prob:
-    render_problem_space(ps)
+# Main Tabs
+tabs = st.tabs(["Problem Context", "Brainstorming", "Shortlist", "Deep Dive", "Comparison", "Final Solution"])
 
-# --- Column 3: Solution Space ---
-with col_sol:
-    render_solution_space(ss)
+with tabs[0]:
+    render_problem_space_content(ps)
+    
+with tabs[1]:
+    st.header("Solution Space")
+    render_brainstorming_candidates(ss, allow_add=True)
 
-if st.session_state.solution_processing:
-    with col_nav:
-        with st.spinner("Thinking..."):
-            inputs = {
-                "chat_input": "Add Solution", 
+with tabs[2]:
+    render_shortlist_view(ss)
+    
+with tabs[3]:
+    # Deep Dive - Enabled if we have candidates (so we can shortlist)
+    if ss and ss.get("candidates"):
+        render_deep_dive_view(ss, mode="expand")
+    else:
+        st.info("Complete Brainstorming to proceed to Deep Dive.")
+        
+with tabs[4]:
+    # Comparison - Enabled if we have expanded candidates
+    if ss and ss.get("expanded_candidates"):
+         render_deep_dive_view(ss, mode="compare")
+    else:
+         st.info("Complete Deep Dive to proceed to Comparison.")
+         
+with tabs[5]:
+    # Final - Enabled if we have comparison (or just expanded?)
+    # Usually Final requires Deep Comparison recommendation
+    if ss and ss.get("deep_comparison"):
+        render_final_view(ss)
+    else:
+        st.info("Complete Comparison to generate Final Solution.")
+
+# Execution Loop
+if st.session_state.pending_solution_step is not None:
+    with st.spinner("Processing Workflow..."):
+         inputs = st.session_state.pending_solution_step
+         workflow_type = inputs.pop("_workflow_type", "generate")
+         
+         config = {"configurable": {"thread_id": st.session_state.thread_id}}
+         try:
+            base_inputs = {
+                "chat_input": "Execute Step", 
                 "workspace_id": st.session_state.current_workspace_id,
                 "version_id": st.session_state.current_version_id
             }
-            config = {"configurable": {"thread_id": st.session_state.thread_id}}
-            try:
-                result = st.session_state.app_solution.invoke(inputs, config)
-                st.session_state.solution_processing = False # Reset processing state
-                if result and result.get("SaveState.final_version_id"):
-                        st.session_state.current_version_id = result["SaveState.final_version_id"]
-                        st.rerun()
-            except Exception as e:
-                st.session_state.solution_processing = False # Ensure reset on error
-                st.error(f"Error generating solution: {e}")
-
+            final_inputs = {**base_inputs, **inputs}
+            
+            if workflow_type == "deep_dive":
+                result = st.session_state.app_deep_dive.invoke(final_inputs, config)
+            elif workflow_type == "final":
+                result = st.session_state.app_final.invoke(final_inputs, config)
+            else:
+                result = st.session_state.app_solution.invoke(final_inputs, config)
+            
+            st.session_state.pending_solution_step = None
+            st.session_state.solution_processing = False
+            
+            if result and result.get("SaveState.final_version_id"):
+                    st.session_state.current_version_id = result["SaveState.final_version_id"]
+                    st.rerun()
+         except Exception as e:
+            st.session_state.pending_solution_step = None
+            st.session_state.solution_processing = False
+            st.error(f"Error executing solution step: {e}")
+            logger.exception("Error during execution loop")
