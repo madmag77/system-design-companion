@@ -1,0 +1,47 @@
+workflow ShortlistCompanion {
+  inputs {
+    String chat_input
+    String workspace_id
+    String version_id
+    List<Int> selected_candidate_ids
+  }
+  
+  outputs {
+    String final_version_id = SaveState.final_version_id?
+  }
+
+  node LoadWorkspace {
+      call load_workspace_state
+      inputs {
+          String workspace_id = workspace_id
+          String version_id = version_id
+      }
+      outputs {
+         Record problem_space
+         Record solution_space
+      }
+  }
+
+  node UpdateShortlist {
+      call update_shortlist
+      inputs {
+          Record solution_space = LoadWorkspace.solution_space?
+          List<Int> selected_ids = selected_candidate_ids
+      }
+      outputs {
+          Record solution_space
+      }
+  }
+
+  node SaveState {
+      call save_state
+      inputs {
+          Record problem_space = LoadWorkspace.problem_space
+          String workspace_id = workspace_id
+          Record solution_space = UpdateShortlist.solution_space
+      }
+      outputs {
+          String final_version_id
+      }
+  }
+}

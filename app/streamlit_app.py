@@ -1,7 +1,6 @@
 import logging
 import streamlit as st
 import sys
-import uuid
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -21,10 +20,9 @@ from app.services.session_manager import (
 )
 from app.services.workflow_service import (
     initialize_workflows, 
-    run_problem_workflow, 
-    process_pending_solution_step,
-    run_solution_step
+    process_pending_solution_step
 )
+from app.services.agent_service import handle_agent_input
 
 # Import UI components
 from app.components.problem_ui import render_problem_space_content
@@ -71,59 +69,63 @@ phase = get_workflow_phase(ss)
 with st.sidebar:
     st.subheader("Workspace")
     workspaces = st.session_state.workspace_manager.list_workspaces()
-    
-    index = 0
-    if st.session_state.current_workspace_id in workspaces:
-         index = workspaces.index(st.session_state.current_workspace_id)
-         
-    selected_ws = st.selectbox("Select", workspaces, index=index, label_visibility="collapsed")
-    
-    if selected_ws and selected_ws != st.session_state.current_workspace_id:
-        st.session_state.current_workspace_id = selected_ws
-        versions = st.session_state.workspace_manager.list_versions(selected_ws)
-        st.session_state.current_version_id = versions[-1] if versions else "v1"
-        st.session_state.messages = [] 
-        st.rerun()
-        
-    col_btn1, col_btn2 = st.columns(2)
-    with col_btn1:
-        if st.button("New", use_container_width=True):
-            new_id = str(uuid.uuid4())
-            st.session_state.current_workspace_id = new_id
-            st.session_state.current_version_id = "v1"
+
+    if workspaces:
+        index = 0
+        if st.session_state.current_workspace_id in workspaces:
+             index = workspaces.index(st.session_state.current_workspace_id)
+
+        selected_ws = st.selectbox("Select", workspaces, index=index, label_visibility="collapsed")
+
+        if selected_ws and selected_ws != st.session_state.current_workspace_id:
+            st.session_state.current_workspace_id = selected_ws
+            versions = st.session_state.workspace_manager.list_versions(selected_ws)
+            st.session_state.current_version_id = versions[-1] if versions else "v1"
+            st.session_state.messages = []
             st.rerun()
-            
+    else:
+        st.caption("No saved workspaces yet.")
+
+    if st.button("New", use_container_width=True):
+        import uuid
+
+        new_id = str(uuid.uuid4())
+        st.session_state.current_workspace_id = new_id
+        st.session_state.current_version_id = "v1"
+        st.session_state.messages = []
+        st.rerun()
+
+    st.caption(f"Version: `{st.session_state.current_version_id}`")
+    st.caption(f"Phase: {phase}")
     st.divider()
-    
+
     st.header("Chat")
-    # Chat History
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
-            
-    # Chat Input
-    if phase != "BRAINSTORM":
-        st.info(f"Phase: {phase}. Chat updates to Problem Space might invalidate solutions.")
-    
-    if prompt := st.chat_input("Input..."):
-            st.session_state.messages.append({"role": "user", "content": prompt})
-            with st.chat_message("user"):
-                st.markdown(prompt)
-                
-            has_solutions = ss is not None and len(ss.get("candidates", [])) > 0
-            
-            if has_solutions and phase == "BRAINSTORM":
-                st.session_state.confirm_solution_removal = "pending"
-                st.session_state.pending_chat_input = prompt
-                st.rerun()
-            elif phase != "BRAINSTORM":
-                success = run_problem_workflow(prompt, remove_solutions=False)
-                if success:
-                    st.rerun()
-            else:
-                success = run_problem_workflow(prompt, remove_solutions=True)
-                if success:
-                    st.rerun()
+
+    if prompt := st.chat_input("Message the agent..."):
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+
+        result = handle_agent_input(prompt, ps, ss)
+        for message in result.get("messages", []):
+            if not message:
+                continue
+            st.session_state.messages.append({"role": "assistant", "content": message})
+            with st.chat_message("assistant"):
+                st.markdown(message)
+
+        if result.get("rerun"):
+            st.rerun()
+
+st.title("System Design Companion")
+st.caption(
+    "Chat with the agent to update the workspace. Examples: "
+    "\"Design a rate limiter\", \"Brainstorm an option\", \"Shortlist 1 and 3\", "
+    "\"Deep dive 1 and 3\", \"Compare options\", \"Finalize option 2\"."
+)
 
 # Main Tabs
 tabs = st.tabs(["Problem Context", "Brainstorming", "Shortlist", "Deep Dive", "Comparison", "Final Solution"])
@@ -133,7 +135,7 @@ with tabs[0]:
     
 with tabs[1]:
     st.header("Solution Space")
-    render_brainstorming_candidates(ss, allow_add=True)
+    render_brainstorming_candidates(ss)
 
 with tabs[2]:
     render_shortlist_view(ss)
@@ -143,14 +145,14 @@ with tabs[3]:
     if ss and ss.get("candidates"):
         render_deep_dive_view(ss, mode="expand")
     else:
-        st.info("Complete Brainstorming to proceed to Deep Dive.")
+        st.info("Ask the agent to brainstorm options before diving deep.")
         
 with tabs[4]:
     # Comparison - Enabled if we have expanded candidates
     if ss and ss.get("expanded_candidates"):
          render_deep_dive_view(ss, mode="compare")
     else:
-         st.info("Complete Deep Dive to proceed to Comparison.")
+         st.info("Ask the agent to run a deep dive before comparing.")
          
 with tabs[5]:
     # Final - Enabled if we have comparison (or just expanded?)
@@ -158,7 +160,7 @@ with tabs[5]:
     if ss and ss.get("deep_comparison"):
         render_final_view(ss)
     else:
-        st.info("Complete Comparison to generate Final Solution.")
+        st.info("Ask the agent to compare options before finalizing.")
 
 # Execution Loop
 process_pending_solution_step()

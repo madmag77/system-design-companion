@@ -1,41 +1,18 @@
 import streamlit as st
-import sys
-from pathlib import Path
 
-# Add path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-
-from app.services.workflow_service import run_solution_step
-from app.services.session_manager import get_shortlisted_ids
-
-def render_brainstorming_candidates(ss, allow_add=True):
+def render_brainstorming_candidates(ss):
     current_candidates = ss.get("candidates", []) if ss else []
-    
-    if allow_add:
-        if len(current_candidates) >= 10:
-                st.warning("Maximum of 10 solutions reached.")
-        else:
-            st.button(
-                "Add Solution", 
-                type="primary", 
-                use_container_width=True,
-                on_click=lambda: run_solution_step({}, workflow_type="generate"),
-                disabled=st.session_state.solution_processing
-            )
-
     if not ss or not current_candidates:
         if not ss:
-            st.info("Solution space not yet generated.")
+            st.info("Solution space not yet generated. Ask the agent to brainstorm options.")
         return
 
-    tabs = st.tabs([f"Option {c['id']}" for c in current_candidates])
-    
-    for i, tab in enumerate(tabs):
-        with tab:
-            c = current_candidates[i]
+    for c in current_candidates:
+        with st.container(border=True):
+            st.markdown(f"### Option {c['id']}")
             st.markdown(f"**Hypothesis:** {c['hypothesis']}")
-            st.markdown(f"**Model:**\n{str(c.get('model', ''))}")
-            st.markdown(f"**Reasoning:**\n{c.get('reasoning', '')}")
+            st.markdown(f"**Model:** {str(c.get('model', ''))}")
+            st.markdown(f"**Reasoning:** {c.get('reasoning', '')}")
 
     if ss.get("comparison"):
         st.subheader("Comparison")
@@ -47,7 +24,7 @@ def render_brainstorming_candidates(ss, allow_add=True):
 
 def render_shortlist_view(ss):
     st.header("Shortlist Candidates")
-    st.write("Select 1-3 candidates to explore in depth.")
+    st.write("Tell the agent which 1-3 options to shortlist.")
     
     if not ss:
         st.write("No candidates to shortlist.")
@@ -58,61 +35,41 @@ def render_shortlist_view(ss):
         st.write("No candidates to shortlist.")
         return
 
-    # Display Candidates with Checkboxes
-    selected_ids = get_shortlisted_ids(ss)
-    
+    selected_ids = ss.get("shortlisted_ids", []) if ss else []
+    if selected_ids:
+        st.success(f"Shortlisted: {', '.join(map(str, selected_ids))}")
+    else:
+        st.info("No shortlist yet. Example: \"Shortlist 1 and 3\".")
+
     cols = st.columns(2)
     for i, c in enumerate(candidates):
         with cols[i % 2]:
             with st.container(border=True):
-                st.markdown(f"**Option {c['id']}**")
-                st.write(c['hypothesis'])
-                
-                # Check restrictions
                 is_selected = c['id'] in selected_ids
-                disabled = len(selected_ids) >= 3 and not is_selected
-                
-                if st.checkbox("Select", key=f"select_{c['id']}", disabled=disabled):
-                    pass # State updated auto
-                    
-    st.caption(f"Selected: {len(selected_ids)}/3")
+                status = " (Shortlisted)" if is_selected else ""
+                st.markdown(f"**Option {c['id']}**{status}")
+                st.write(c['hypothesis'])
 
 def render_deep_dive_view(ss, mode="expand"):
     # mode: 'expand' or 'compare'
     
     if mode == "expand":
         st.header("Deep Dive Analysis")
-        
-        selected_ids = get_shortlisted_ids(ss)
-        
+        selected_ids = ss.get("shortlisted_ids", []) if ss else []
+
         if not selected_ids:
-            st.warning("Please go to 'Shortlist' tab and select 1-3 candidates.")
+            st.info("No shortlist yet. Ask the agent to shortlist options before diving deep.")
             return
 
         expanded = ss.get("expanded_candidates", [])
-        expanded_ids = [c['id'] for c in expanded]
-        
-        # Check if selection matches data
-        is_out_of_sync = set(selected_ids) != set(expanded_ids)
-        
-        # Always show button if missing or out of sync
-        if not expanded or is_out_of_sync:
-            # Fix button label logic if needed, original code:
-            btn_label = "Run Deep Dive" if not expanded else "Update Deep Dive (Selection Changed)"
-            if st.button(btn_label, type="primary"):
-                 run_solution_step({"selected_candidate_ids": selected_ids}, workflow_type="deep_dive")
-            
-            if not expanded:
-                return
-            st.divider()
+        if not expanded:
+            st.info("No deep dive results yet. Ask the agent to run a deep dive.")
+            return
 
-        # If we have results, display them
-        tabs = st.tabs([f"Option {c['id']}" for c in expanded])
-        for i, t in enumerate(tabs):
-            with t:
-                c = expanded[i]
-                st.subheader(c['hypothesis'])
-                
+        for c in expanded:
+            with st.container(border=True):
+                st.subheader(f"Option {c['id']}: {c['hypothesis']}")
+
                 c1, c2 = st.columns(2)
                 with c1:
                     st.markdown("#### Components")
@@ -129,19 +86,20 @@ def render_deep_dive_view(ss, mode="expand"):
                     
                 st.markdown("#### Architecture Description")
                 st.write(c.get('architecture_diagram_description'))
+                st.markdown("#### Data Flow")
+                st.write(c.get('data_flow'))
                 
     elif mode == "compare":
         st.header("Deep Comparison")
         
         # Check if Deep Dive is done
         if not ss.get("expanded_candidates"):
-             st.warning("Please complete Deep Dive first.")
+             st.info("Please complete a deep dive before comparing options.")
              return
 
         comp = ss.get("deep_comparison")
         if not comp:
-             if st.button("Run Comparison", type="primary"):
-                 run_solution_step({"current_phase": "DEEP_DIVE"}, workflow_type="deep_dive") 
+             st.info("No comparison yet. Ask the agent to compare the deep-dive options.")
              return
              
         st.markdown(str(comp.get('analysis')))
@@ -153,47 +111,32 @@ def render_final_view(ss):
     
     # Check if comparison is done (optional but good flow)
     if not ss.get("deep_comparison"):
-        st.warning("Please complete Deep Comparison first.")
+        st.info("Please complete a comparison before finalizing.")
         return
         
     doc = ss.get("final_solution")
     
     if not doc:
-        # Show configuration for Final Gen
         expanded = ss.get("expanded_candidates", [])
         opts = [c['id'] for c in expanded]
-        
-        col1, col2 = st.columns([3, 1])
-        with col1:
-             # Default to first valid option if available, else 0
-            idx = 0
-            # FIX: final_id used before assignment if not careful.
-            # Original code:
-            if opts:
-                 final_id = st.selectbox("Select Solution to Finalize", opts)
-            else:
-                 st.write("No solutions to finalize.")
-                 return
-        with col2:
-            st.write("")
-            st.write("")
-            if st.button("Generate Final SDD", type="primary"):
-                 run_solution_step({"current_phase": "FINAL", "final_selected_id": final_id}, workflow_type="final")
+        if opts:
+            st.info(
+                f"No final document yet. Ask the agent to finalize an option "
+                f"(available: {', '.join(map(str, opts))})."
+            )
+        else:
+            st.info("No solutions to finalize yet.")
         return
         
     st.title(doc.get("title", "System Design Document"))
     st.markdown("### Executive Summary")
     st.write(doc.get("executive_summary"))
-    
-    with st.expander("Detailed Architecture", expanded=True):
-        st.write(doc.get("detailed_architecture"))
-        
-    with st.expander("Implementation Plan", expanded=True):
-        st.write(doc.get("implementation_plan"))
-        
-    with st.expander("FAQ", expanded=False):
-        st.write(doc.get("faq"))
-        
-    if st.button("Regenerate"):
-        # Reset final?
-        run_solution_step({"current_phase": "FINAL", "final_selected_id": ss.get("shortlisted_ids", [1])[0]}, workflow_type="final")
+
+    st.markdown("### Detailed Architecture")
+    st.write(doc.get("detailed_architecture"))
+
+    st.markdown("### Implementation Plan")
+    st.write(doc.get("implementation_plan"))
+
+    st.markdown("### FAQ")
+    st.write(doc.get("faq"))

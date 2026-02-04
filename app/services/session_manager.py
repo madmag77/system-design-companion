@@ -38,6 +38,9 @@ def initialize_session_state():
     if "pending_chat_input" not in st.session_state:
         st.session_state.pending_chat_input = None
 
+    if "agent_pending" not in st.session_state:
+        st.session_state.agent_pending = None
+
 def get_workflow_phase(ss):
     if not ss:
         return "BRAINSTORM"

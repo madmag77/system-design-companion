@@ -316,6 +316,17 @@ def compare_solutions(problem_space: dict, solution_space: dict = None, candidat
 
 # --- Extended Workflow Functions ---
 
+def update_shortlist(solution_space: dict, selected_ids: List[int], config: dict = None) -> dict:
+    logger.info(f"update_shortlist called with {len(selected_ids) if selected_ids else 0} selected IDs")
+
+    import copy
+    new_ss = copy.deepcopy(solution_space) if solution_space else {}
+    new_ss["shortlisted_ids"] = selected_ids or []
+
+    return {
+        "solution_space": new_ss
+    }
+
 def expand_solution_candidates(problem_space: dict, solution_space: dict, selected_ids: List[int], config: dict = None) -> dict:
     logger.info(f"expand_solution_candidates called with {len(selected_ids) if selected_ids else 0} selected IDs")
     

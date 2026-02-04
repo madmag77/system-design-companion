@@ -18,6 +18,7 @@ from workflow_definitions.system_design.functions_companion import (
     refine_problem_space,
     generate_candidate,
     compare_solutions,
+    update_shortlist,
     expand_solution_candidates,
     generate_deep_comparison,
     generate_final_solution_document
@@ -67,6 +68,15 @@ def initialize_workflows():
         final_workflow_path = "workflow_definitions/system_design/final_solution_companion.wirl"
         st.session_state.app_final = build_pregel_graph(final_workflow_path, fn_map_final, checkpointer=MemorySaver())
 
+    if "app_shortlist" not in st.session_state:
+        fn_map_shortlist = {
+            "load_workspace_state": load_workspace_state,
+            "update_shortlist": update_shortlist,
+            "save_state": save_state,
+        }
+        shortlist_workflow_path = "workflow_definitions/system_design/shortlist_companion.wirl"
+        st.session_state.app_shortlist = build_pregel_graph(shortlist_workflow_path, fn_map_shortlist, checkpointer=MemorySaver())
+
 def run_solution_step(inputs, workflow_type="generate"):
     # workflow_type: 'generate', 'deep_dive', 'final'
     inputs["_workflow_type"] = workflow_type # Store type for execution loop
@@ -113,6 +123,8 @@ def process_pending_solution_step():
                     result = st.session_state.app_deep_dive.invoke(final_inputs, config)
                 elif workflow_type == "final":
                     result = st.session_state.app_final.invoke(final_inputs, config)
+                elif workflow_type == "shortlist":
+                    result = st.session_state.app_shortlist.invoke(final_inputs, config)
                 else:
                     result = st.session_state.app_solution.invoke(final_inputs, config)
                 
