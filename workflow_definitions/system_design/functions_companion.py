@@ -28,7 +28,7 @@ from workflow_definitions.system_design.prompts_companion import (
 logger = logging.getLogger(__name__)
 
 def get_llm(config: dict = None):
-    model = "gemma3:27b"
+    model = "gpt-oss:20b"
     temperature = 0.1
     if config:
         model = config.get("model", model)

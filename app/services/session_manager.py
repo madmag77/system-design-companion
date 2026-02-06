@@ -41,6 +41,9 @@ def initialize_session_state():
     if "agent_pending" not in st.session_state:
         st.session_state.agent_pending = None
 
+    if "agent_needs_rerun" not in st.session_state:
+        st.session_state.agent_needs_rerun = False
+
 def get_workflow_phase(ss):
     if not ss:
         return "BRAINSTORM"

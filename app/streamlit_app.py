@@ -106,19 +106,12 @@ with st.sidebar:
 
     if prompt := st.chat_input("Message the agent..."):
         st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
-
         result = handle_agent_input(prompt, ps, ss)
         for message in result.get("messages", []):
             if not message:
                 continue
             st.session_state.messages.append({"role": "assistant", "content": message})
-            with st.chat_message("assistant"):
-                st.markdown(message)
-
-        if result.get("rerun"):
-            st.rerun()
+        st.rerun()
 
 st.title("System Design Companion")
 st.caption(

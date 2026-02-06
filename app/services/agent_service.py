@@ -1,8 +1,8 @@
-import re
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Literal
 
 import streamlit as st
 from langchain_core.prompts import ChatPromptTemplate
+from pydantic import BaseModel, Field
 
 from app.services.session_manager import get_workflow_phase
 from app.services.workflow_service import run_problem_workflow, run_solution_step
@@ -17,24 +17,87 @@ UI_HELP_TEXT = (
     "\"Deep dive 1 and 3\", \"Compare the shortlisted options\", or \"Finalize option 2\"."
 )
 
-QUESTION_PROMPT = ChatPromptTemplate.from_template(
-    """You are the System Design Companion. Answer the user's question clearly and concisely.
-If you need missing info, ask one brief clarifying question.
+AGENT_ACTION_PROMPT = ChatPromptTemplate.from_template(
+    """You are the System Design Companion. Decide the next action and provide a response.
+You may only choose one action from:
+- respond
+- explain_ui
+- list_workspaces
+- new_workspace
+- switch_workspace
+- update_problem
+- confirm_destructive
+- brainstorm
+- shortlist
+- deep_dive
+- compare
+- finalize
 
-Current Workspace Context:
+Rules:
+- Use respond to ask a clarifying question or answer without changing the workspace.
+- Only update the workspace by choosing a non-respond action.
+- If a destructive change is pending, and the user confirms, choose confirm_destructive with confirm=true.
+- If the user declines, choose confirm_destructive with confirm=false.
+- If you need missing IDs, ask a short question via respond.
+- If a destructive change is pending, resolve it before taking other actions.
+ - Do not ask for confirmation yourself. Use update_problem to trigger confirmation.
+ - If the user requests edits to the problem space (context, invariants, goal, problem, variants), choose update_problem.
+Field requirements:
+- switch_workspace: set workspace_id
+- shortlist/deep_dive: set option_ids (list of integers)
+- finalize: set option_id
+- confirm_destructive: set confirm true or false
+
+Workspace:
+ID: {workspace_id}
+Version: {version_id}
+Phase: {phase}
+Pending: {pending}
+
+Problem Space:
 Context: {context}
 Goal: {goal}
 Problem: {problem}
 Invariants: {invariants}
-Phase: {phase}
+Variants: {variants}
 
-User Question: {question}
+Solution Space:
+Candidates: {candidates}
+Shortlisted IDs: {shortlisted_ids}
+Expanded Candidates: {expanded_candidates}
+Deep Comparison: {has_comparison}
+Final Solution: {has_final}
+
+Last assistant message: {last_assistant}
+User message: {user_text}
 """
 )
 
 
+class AgentAction(BaseModel):
+    action: Literal[
+        "respond",
+        "explain_ui",
+        "list_workspaces",
+        "new_workspace",
+        "switch_workspace",
+        "update_problem",
+        "confirm_destructive",
+        "brainstorm",
+        "shortlist",
+        "deep_dive",
+        "compare",
+        "finalize",
+    ]
+    response: str = Field(default="", description="Assistant response to show the user.")
+    workspace_id: Optional[str] = None
+    option_ids: Optional[List[int]] = None
+    option_id: Optional[int] = None
+    confirm: Optional[bool] = None
+
+
 def handle_agent_input(user_text: str, ps: dict, ss: Optional[dict]) -> Dict[str, Any]:
-    """Handle a single user turn and decide how to respond and which workflow to run."""
+    """Handle a single user turn using a tool-like LLM decision."""
     if st.session_state.solution_processing:
         return {
             "messages": [
@@ -43,539 +106,300 @@ def handle_agent_input(user_text: str, ps: dict, ss: Optional[dict]) -> Dict[str
             "rerun": False,
         }
 
-    pending = st.session_state.get("agent_pending")
-    if pending:
-        return _handle_pending(pending, user_text, ps, ss)
-
-    text = user_text.strip()
-    lowered = text.lower()
-
-    # Workspace management
-    if _contains_any(
-        lowered,
-        [
-            "new workspace",
-            "create workspace",
-            "start over",
-            "start a new",
-            "fresh workspace",
-            "reset workspace",
-            "new session",
-            "new project",
-        ],
-    ):
-        return _create_new_workspace()
-
-    if _contains_any(lowered, ["list workspaces", "show workspaces", "available workspaces"]):
-        return _list_workspaces()
-
-    if _contains_any(lowered, ["switch workspace", "open workspace", "load workspace", "use workspace"]):
-        return _switch_workspace(lowered)
-
-    if _extract_workspace_id(text, st.session_state.workspace_manager.list_workspaces()):
-        return _switch_workspace(text)
-
-    # UI / workflow explanation
-    if _is_ui_question(lowered):
-        return {"messages": [UI_HELP_TEXT, _action_nudge("problem_update")], "rerun": False}
-
-    # Intent routing (ordered from most specific to general)
-    if _contains_any(lowered, ["final", "finalize", "finish", "recommendation", "decide"]):
-        return _handle_finalize(text, ss)
-
-    if _contains_any(lowered, ["compare", "comparison", "trade-off", "tradeoff"]):
-        return _handle_compare(ss)
-
-    if _contains_any(lowered, ["deep dive", "deep-dive", "expand", "details", "drill down"]):
-        return _handle_deep_dive(text, ss)
-
-    if _contains_any(lowered, ["shortlist", "short list", "select", "pick", "choose"]):
-        return _handle_shortlist(text, ss)
-
-    if _contains_any(
-        lowered,
-        [
-            "brainstorm",
-            "idea",
-            "another idea",
-            "new option",
-            "another option",
-            "add option",
-            "add solution",
-            "new solution",
-            "another solution",
-            "more solutions",
-            "generate option",
-            "generate solution",
-        ],
-    ):
-        return _handle_brainstorm(ss)
-
-    # General question (non-UI)
-    if _looks_like_question(lowered):
-        return _answer_general_question(text, ps, ss)
-
-    mentioned = _extract_candidate_mentions(text, ss)
-    if mentioned:
-        st.session_state.agent_pending = {"type": "candidate_intent", "payload": {"ids": mentioned}}
-        return {
-            "messages": [
-                f"I noticed you referenced option(s) {', '.join(map(str, mentioned))}. "
-                "Should I shortlist them, run a deep dive, compare, or finalize?"
-            ],
-            "rerun": False,
-        }
-
-    # Default: treat as problem space update
-    return _handle_problem_update(text, ps, ss)
-
-
-def _handle_pending(pending: dict, user_text: str, ps: dict, ss: Optional[dict]) -> Dict[str, Any]:
-    text = user_text.strip().lower()
-
-    if pending.get("type") == "confirm_problem_update":
-        if _is_affirmative(text):
-            st.session_state.agent_pending = None
-            prompt = pending.get("payload", {}).get("prompt", "")
-            success = run_problem_workflow(prompt, remove_solutions=True)
-            if success:
-                return {
-                    "messages": [
-                        "Updated the problem context and cleared the solution space to keep everything consistent.",
-                        _action_nudge("problem_update"),
-                    ],
-                    "rerun": True,
-                }
-            return {"messages": ["I ran into an issue updating the problem space."], "rerun": False}
-
-        if _is_negative(text):
-            st.session_state.agent_pending = None
-            return {
-                "messages": [
-                    "No problem -- I didn't change the workspace. Let me know how you'd like to proceed."
-                ],
-                "rerun": False,
-            }
-
-        return {
-            "messages": ["Please confirm: should I update the problem space and clear existing solutions?"],
-            "rerun": False,
-        }
-
-    if pending.get("type") == "need_shortlist_ids":
-        st.session_state.agent_pending = None
-        return _handle_shortlist(user_text, ss)
-
-    if pending.get("type") == "need_deep_dive_ids":
-        st.session_state.agent_pending = None
-        return _handle_deep_dive(user_text, ss)
-
-    if pending.get("type") == "need_final_id":
-        st.session_state.agent_pending = None
-        return _handle_finalize(user_text, ss)
-
-    if pending.get("type") == "need_workspace_id":
-        st.session_state.agent_pending = None
-        return _switch_workspace(user_text)
-
-    if pending.get("type") == "candidate_intent":
-        st.session_state.agent_pending = None
-        ids = pending.get("payload", {}).get("ids", [])
-        if not ids:
-            return {"messages": ["Which option did you want to work with?"], "rerun": False}
-
-        if _contains_any(text, ["shortlist", "short list", "select", "pick"]):
-            return _handle_shortlist(f"shortlist {' '.join(map(str, ids))}", ss)
-        if _contains_any(text, ["deep dive", "deep-dive", "expand", "details"]):
-            return _handle_deep_dive(f"deep dive {' '.join(map(str, ids))}", ss)
-        if _contains_any(text, ["compare", "comparison", "trade-off", "tradeoff"]):
-            return _handle_compare(ss)
-        if _contains_any(text, ["final", "finalize", "finish", "recommendation", "decide"]):
-            return _handle_finalize(f"finalize {' '.join(map(str, ids))}", ss)
-
-        if _is_negative(text):
-            return {"messages": ["Okay, I won't take action yet."], "rerun": False}
-
-        return {
-            "messages": [
-                "Should I shortlist, deep dive, compare, or finalize those options?"
-            ],
-            "rerun": False,
-        }
-
-    st.session_state.agent_pending = None
-    return {"messages": ["I'm not sure what we were waiting on. Could you rephrase?"], "rerun": False}
-
-
-def _handle_problem_update(text: str, ps: dict, ss: Optional[dict]) -> Dict[str, Any]:
-    has_solutions = bool(ss and ss.get("candidates"))
-    if has_solutions:
-        st.session_state.agent_pending = {
-            "type": "confirm_problem_update",
-            "payload": {"prompt": text},
-        }
-        return {
-            "messages": [
-                "Updating the problem space will clear existing solutions to keep the workspace in sync. Proceed?"
-            ],
-            "rerun": False,
-        }
-
-    success = run_problem_workflow(text, remove_solutions=True)
-    if success:
-        return {
-            "messages": [
-                "Updated the problem context.",
-                _action_nudge("problem_update"),
-            ],
-            "rerun": True,
-        }
-    return {"messages": ["I couldn't update the problem space just now."], "rerun": False}
-
-
-def _handle_brainstorm(ss: Optional[dict]) -> Dict[str, Any]:
-    current_candidates = ss.get("candidates", []) if ss else []
-    if len(current_candidates) >= 10:
-        return {
-            "messages": [
-                "We already have 10 options, which is the current limit. "
-                "Tell me which ones to shortlist."
-            ],
-            "rerun": False,
-        }
-
-    run_solution_step({}, workflow_type="generate")
-    return {
-        "messages": [
-            "Adding a new solution candidate now.",
-            _action_nudge("brainstorm"),
-        ],
-        "rerun": False,
-    }
-
-
-def _handle_shortlist(text: str, ss: Optional[dict]) -> Dict[str, Any]:
-    candidates = ss.get("candidates", []) if ss else []
-    if not candidates:
-        return {
-            "messages": [
-                "There are no brainstormed options yet. Ask me to generate some first."
-            ],
-            "rerun": False,
-        }
-
-    available_ids = [c["id"] for c in candidates]
-    selected_ids = _extract_ids(text, available_ids)
-    if not selected_ids:
-        st.session_state.agent_pending = {"type": "need_shortlist_ids"}
-        return {
-            "messages": [
-                f"Which options should I shortlist? Available options: {', '.join(map(str, available_ids))}."
-            ],
-            "rerun": False,
-        }
-
-    run_solution_step({"selected_candidate_ids": selected_ids}, workflow_type="shortlist")
-    return {
-        "messages": [
-            f"Shortlisting options {', '.join(map(str, selected_ids))}.",
-            _action_nudge("shortlist"),
-        ],
-        "rerun": False,
-    }
-
-
-def _handle_deep_dive(text: str, ss: Optional[dict]) -> Dict[str, Any]:
-    candidates = ss.get("candidates", []) if ss else []
-    if not candidates:
-        return {
-            "messages": [
-                "There are no options to expand yet. Ask me to brainstorm first."
-            ],
-            "rerun": False,
-        }
-
-    available_ids = [c["id"] for c in candidates]
-    selected_ids = _extract_ids(text, available_ids)
-    if not selected_ids:
-        shortlisted = ss.get("shortlisted_ids", []) if ss else []
-        if shortlisted:
-            selected_ids = shortlisted
-        else:
-            st.session_state.agent_pending = {"type": "need_deep_dive_ids"}
-            return {
-                "messages": [
-                    f"Which options should I dive into? Available options: {', '.join(map(str, available_ids))}."
-                ],
-                "rerun": False,
-            }
-
-    run_solution_step({"selected_candidate_ids": selected_ids}, workflow_type="deep_dive")
-    return {
-        "messages": [
-            f"Running a deep dive on options {', '.join(map(str, selected_ids))}.",
-            _action_nudge("deep_dive"),
-        ],
-        "rerun": False,
-    }
-
-
-def _handle_compare(ss: Optional[dict]) -> Dict[str, Any]:
-    if not ss or not ss.get("expanded_candidates"):
-        return {
-            "messages": [
-                "I need deep-dive details before I can compare. "
-                "Tell me which options to deep dive first."
-            ],
-            "rerun": False,
-        }
-
-    run_solution_step({"selected_candidate_ids": []}, workflow_type="deep_dive")
-    return {
-        "messages": [
-            "Generating a comparison of the deep-dive options now.",
-            _action_nudge("compare"),
-        ],
-        "rerun": False,
-    }
-
-
-def _handle_finalize(text: str, ss: Optional[dict]) -> Dict[str, Any]:
-    expanded = ss.get("expanded_candidates", []) if ss else []
-    if not expanded:
-        return {
-            "messages": [
-                "I need deep-dive options before finalizing. Ask me to run a deep dive first."
-            ],
-            "rerun": False,
-        }
-
-    expanded_ids = [c["id"] for c in expanded]
-    selected_id = _extract_single_id(text, expanded_ids)
-    if selected_id is None:
-        st.session_state.agent_pending = {"type": "need_final_id"}
-        return {
-            "messages": [
-                f"Which option should I finalize? Available options: {', '.join(map(str, expanded_ids))}."
-            ],
-            "rerun": False,
-        }
-
-    run_solution_step({"final_selected_id": selected_id}, workflow_type="final")
-    return {
-        "messages": [
-            f"Finalizing option {selected_id}.",
-            _action_nudge("final"),
-        ],
-        "rerun": False,
-    }
-
-
-def _answer_general_question(text: str, ps: dict, ss: Optional[dict]) -> Dict[str, Any]:
     phase = get_workflow_phase(ss)
+    pending = st.session_state.get("agent_pending")
+    if pending and pending.get("type") == "confirm_problem_update":
+        normalized = user_text.strip().lower()
+        if _is_affirmative(normalized):
+            response = _confirm_destructive(True)
+            return {"messages": [response], "rerun": st.session_state.agent_needs_rerun}
+        if _is_negative(normalized):
+            response = _confirm_destructive(False)
+            return {"messages": [response], "rerun": st.session_state.agent_needs_rerun}
+
+    st.session_state.agent_context = {
+        "problem_space": ps or {},
+        "solution_space": ss or {},
+        "phase": phase,
+        "pending": pending,
+        "workspace_id": st.session_state.current_workspace_id,
+        "version_id": st.session_state.current_version_id,
+    }
+    st.session_state.agent_needs_rerun = False
+
     try:
-        llm = get_llm()
-        prompt = QUESTION_PROMPT.format_prompt(
-            context=ps.get("context", ""),
-            goal=ps.get("goal", ""),
-            problem=ps.get("problem", ""),
-            invariants=ps.get("invariants", []),
-            phase=phase,
-            question=text,
-        )
-        response = llm.invoke(prompt.to_messages())
-        answer = response.content.strip() if hasattr(response, "content") else str(response)
-        if not answer:
-            raise ValueError("Empty response")
-        return {"messages": [answer], "rerun": False}
+        action = _decide_action(user_text, ps or {}, ss or {}, phase, pending)
     except Exception:
         return {
-            "messages": [
-                "I can help with that. Could you clarify how this relates to the system you want to design?"
-            ],
+            "messages": ["I had trouble understanding that. Could you rephrase?"],
             "rerun": False,
         }
 
+    response = _execute_action(action, user_text, ps or {}, ss or {})
+    return {"messages": [response], "rerun": st.session_state.agent_needs_rerun}
 
-def _create_new_workspace() -> Dict[str, Any]:
+
+def _decide_action(user_text: str, ps: dict, ss: dict, phase: str, pending: Optional[dict]) -> AgentAction:
+    candidates = ss.get("candidates", []) if ss else []
+    expanded = ss.get("expanded_candidates", []) if ss else []
+    shortlisted = ss.get("shortlisted_ids", []) if ss else []
+    has_comparison = bool(ss.get("deep_comparison")) if ss else False
+    has_final = bool(ss.get("final_solution")) if ss else False
+
+    pending_line = "None"
+    if pending and pending.get("type") == "confirm_problem_update":
+        pending_line = "Confirmation required to update the problem space (would clear solutions)."
+
+    candidate_lines = [f"{c.get('id')}: {c.get('hypothesis', '')}" for c in candidates]
+    expanded_lines = [f"{c.get('id')}: {c.get('hypothesis', '')}" for c in expanded]
+
+    last_assistant = _last_assistant_message()
+    prompt = AGENT_ACTION_PROMPT.format_prompt(
+        workspace_id=st.session_state.current_workspace_id,
+        version_id=st.session_state.current_version_id,
+        phase=phase,
+        pending=pending_line,
+        context=ps.get("context", ""),
+        goal=ps.get("goal", ""),
+        problem=ps.get("problem", ""),
+        invariants=ps.get("invariants", []),
+        variants=ps.get("variants", []),
+        candidates=candidate_lines or "None",
+        shortlisted_ids=shortlisted,
+        expanded_candidates=expanded_lines or "None",
+        has_comparison=has_comparison,
+        has_final=has_final,
+        user_text=user_text,
+        last_assistant=last_assistant,
+    )
+
+    llm = get_llm()
+    structured_llm = llm.with_structured_output(AgentAction)
+    return structured_llm.invoke(prompt.to_messages())
+
+
+def _execute_action(action: AgentAction, user_text: str, ps: dict, ss: dict) -> str:
+    if action.action == "respond":
+        return action.response or "What would you like to do next?"
+    if action.action == "explain_ui":
+        return UI_HELP_TEXT
+    if action.action == "list_workspaces":
+        return _list_workspaces()
+    if action.action == "new_workspace":
+        return _new_workspace()
+    if action.action == "switch_workspace":
+        return _switch_workspace(action.workspace_id)
+    if action.action == "update_problem":
+        return _update_problem(user_text)
+    if action.action == "confirm_destructive":
+        if action.confirm is None:
+            return "Please confirm with yes or no."
+        return _confirm_destructive(action.confirm)
+    if action.action == "brainstorm":
+        return _brainstorm_candidate()
+    if action.action == "shortlist":
+        return _shortlist_candidates(action.option_ids)
+    if action.action == "deep_dive":
+        return _deep_dive_candidates(action.option_ids)
+    if action.action == "compare":
+        return _compare_candidates()
+    if action.action == "finalize":
+        return _finalize_solution(action.option_id)
+    return action.response or "What would you like to do next?"
+
+
+def _last_assistant_message() -> str:
+    history = st.session_state.messages if st.session_state.messages else []
+    for msg in reversed(history):
+        if msg.get("role") == "assistant":
+            return msg.get("content", "")
+    return ""
+
+
+def _is_affirmative(text: str) -> bool:
+    return text in {
+        "yes",
+        "yes please",
+        "yep",
+        "yeah",
+        "sure",
+        "ok",
+        "okay",
+        "do it",
+        "go ahead",
+        "confirm",
+    }
+
+
+def _is_negative(text: str) -> bool:
+    return text in {
+        "no",
+        "nope",
+        "nah",
+        "stop",
+        "cancel",
+        "don't",
+        "do not",
+    }
+
+
+def _list_workspaces() -> str:
+    workspaces = st.session_state.workspace_manager.list_workspaces()
+    if not workspaces:
+        return "No saved workspaces yet. Say 'new workspace' to start one."
+    items = ", ".join(workspaces)
+    return f"Available workspaces: {items}."
+
+
+def _new_workspace() -> str:
     import uuid
 
     new_id = str(uuid.uuid4())
     st.session_state.current_workspace_id = new_id
     st.session_state.current_version_id = "v1"
     st.session_state.messages = []
-    return {
-        "messages": [f"Created a new workspace: `{new_id}`.", _action_nudge("problem_update")],
-        "rerun": True,
-    }
+    st.session_state.agent_needs_rerun = True
+    return f"Created a new workspace: {new_id}."
 
 
-def _list_workspaces() -> Dict[str, Any]:
+def _switch_workspace(workspace_id: Optional[str]) -> str:
+    if not workspace_id:
+        return "Which workspace should I open?"
     workspaces = st.session_state.workspace_manager.list_workspaces()
-    if not workspaces:
-        return {
-            "messages": [
-                "No saved workspaces yet. Say \"new workspace\" to start one."
-            ],
-            "rerun": False,
-        }
+    if workspace_id not in workspaces:
+        return f"I could not find workspace '{workspace_id}'. Try list_workspaces first."
 
-    items = ", ".join(f"`{ws}`" for ws in workspaces)
-    return {"messages": [f"Available workspaces: {items}."], "rerun": False}
-
-
-def _switch_workspace(text: str) -> Dict[str, Any]:
-    workspaces = st.session_state.workspace_manager.list_workspaces()
-    if not workspaces:
-        return {
-            "messages": [
-                "No saved workspaces yet. Say \"new workspace\" to start one."
-            ],
-            "rerun": False,
-        }
-
-    target = _extract_workspace_id(text, workspaces)
-    if not target:
-        st.session_state.agent_pending = {"type": "need_workspace_id"}
-        return {
-            "messages": [
-                f"Which workspace should I open? Available: {', '.join(workspaces)}."
-            ],
-            "rerun": False,
-        }
-
-    st.session_state.current_workspace_id = target
-    versions = st.session_state.workspace_manager.list_versions(target)
+    st.session_state.current_workspace_id = workspace_id
+    versions = st.session_state.workspace_manager.list_versions(workspace_id)
     st.session_state.current_version_id = versions[-1] if versions else "v1"
     st.session_state.messages = []
-    return {
-        "messages": [f"Switched to workspace `{target}`."],
-        "rerun": True,
-    }
+    st.session_state.agent_needs_rerun = True
+    return f"Switched to workspace {workspace_id}."
 
 
-def _action_nudge(action: str) -> str:
-    nudges = {
-        "problem_update": "Want me to brainstorm solution options next?",
-        "brainstorm": "Want to shortlist 1-3 options? Tell me the option numbers.",
-        "shortlist": "Want a deep dive on the shortlisted options?",
-        "deep_dive": "Want me to compare the deep-dive options and recommend one?",
-        "compare": "Want me to finalize a recommendation? Tell me the option number.",
-        "final": "We have a final solution. Want refinements, or should we wrap up?",
-    }
-    return nudges.get(action, "")
+def _update_problem(prompt: str) -> str:
+    context = st.session_state.get("agent_context", {})
+    ss = context.get("solution_space") or {}
+    has_solutions = bool(ss.get("candidates"))
 
-
-def _extract_ids(text: str, available_ids: List[int]) -> List[int]:
-    found = [int(match) for match in re.findall(r"\b\d+\b", text)]
-    filtered = [i for i in found if i in available_ids]
-    # Preserve order and uniqueness
-    seen = set()
-    result = []
-    for i in filtered:
-        if i not in seen:
-            result.append(i)
-            seen.add(i)
-    return result
-
-
-def _extract_single_id(text: str, available_ids: List[int]) -> Optional[int]:
-    ids = _extract_ids(text, available_ids)
-    return ids[0] if ids else None
-
-
-def _extract_candidate_mentions(text: str, ss: Optional[dict]) -> List[int]:
-    candidates = ss.get("candidates", []) if ss else []
-    if not candidates:
-        return []
-    available_ids = [c["id"] for c in candidates]
-    return _extract_ids(text, available_ids)
-
-
-def _extract_workspace_id(text: str, workspaces: List[str]) -> Optional[str]:
-    lowered = text.lower()
-    for ws in workspaces:
-        if ws.lower() in lowered:
-            return ws
-
-    tokens = re.findall(r"[a-f0-9-]{6,}", lowered)
-    for token in tokens:
-        matches = [ws for ws in workspaces if ws.lower().startswith(token)]
-        if len(matches) == 1:
-            return matches[0]
-    return None
-
-
-def _contains_any(text: str, keywords: List[str]) -> bool:
-    return any(keyword in text for keyword in keywords)
-
-
-def _looks_like_question(text: str) -> bool:
-    if text.endswith("?"):
-        return True
-    return any(
-        text.startswith(prefix)
-        for prefix in (
-            "what",
-            "why",
-            "how",
-            "when",
-            "where",
-            "who",
-            "can ",
-            "could ",
-            "should ",
-            "do ",
-            "does ",
-            "is ",
-            "are ",
-            "explain",
-            "help",
+    if has_solutions:
+        st.session_state.agent_pending = {
+            "type": "confirm_problem_update",
+            "payload": {"prompt": prompt},
+        }
+        return (
+            "Updating the problem space will clear existing solutions to keep the workspace in sync. "
+            "Reply 'yes' to confirm or 'no' to cancel."
         )
-    )
+
+    success = run_problem_workflow(prompt, remove_solutions=True)
+    if success:
+        st.session_state.agent_needs_rerun = True
+        return "Updated the problem context."
+    return "I couldn't update the problem space just now."
 
 
-def _is_ui_question(text: str) -> bool:
-    if not _looks_like_question(text):
-        return False
-    return _contains_any(
-        text,
-        [
-            "tab",
-            "tabs",
-            "problem context",
-            "brainstorm",
-            "shortlist",
-            "deep dive",
-            "comparison",
-            "final",
-            "workspace",
-            "version",
-            "phase",
-            "ui",
-            "screen",
-            "interface",
-        ],
-    )
+def _confirm_destructive(confirm: bool) -> str:
+    pending = st.session_state.get("agent_pending")
+    if not pending or pending.get("type") != "confirm_problem_update":
+        return "There is no pending change to confirm."
+
+    if not confirm:
+        st.session_state.agent_pending = None
+        return "Okay, I did not change the workspace."
+
+    prompt = pending.get("payload", {}).get("prompt", "")
+    st.session_state.agent_pending = None
+    success = run_problem_workflow(prompt, remove_solutions=True)
+    if success:
+        st.session_state.agent_needs_rerun = True
+        return "Updated the problem context and cleared the solution space."
+    return "I ran into an issue updating the problem space."
 
 
-def _is_affirmative(text: str) -> bool:
-    return _contains_any(
-        text,
-        [
-            "yes",
-            "yep",
-            "yeah",
-            "sure",
-            "ok",
-            "okay",
-            "do it",
-            "go ahead",
-            "please",
-            "confirm",
-        ],
-    )
+def _brainstorm_candidate() -> str:
+    context = st.session_state.get("agent_context", {})
+    ss = context.get("solution_space") or {}
+    candidates = ss.get("candidates", [])
+    if len(candidates) >= 10:
+        return "We already have 10 options, which is the current limit."
+
+    run_solution_step({}, workflow_type="generate")
+    st.session_state.agent_needs_rerun = True
+    return "Adding a new solution candidate now."
 
 
-def _is_negative(text: str) -> bool:
-    return _contains_any(text, ["no", "nope", "nah", "stop", "cancel", "don't", "do not"])
+def _shortlist_candidates(option_ids: Optional[List[int]]) -> str:
+    context = st.session_state.get("agent_context", {})
+    ss = context.get("solution_space") or {}
+    candidates = ss.get("candidates", [])
+    if not candidates:
+        return "There are no brainstormed options yet. Ask me to generate some first."
+
+    available = [c.get("id") for c in candidates]
+    if not option_ids:
+        return f"Which options should I shortlist? Available options: {available}."
+
+    invalid = [oid for oid in option_ids if oid not in available]
+    if invalid:
+        return f"Unknown option IDs: {invalid}. Available options: {available}."
+
+    if len(option_ids) > 3:
+        return "Please pick up to 3 options to shortlist."
+
+    run_solution_step({"selected_candidate_ids": option_ids}, workflow_type="shortlist")
+    st.session_state.agent_needs_rerun = True
+    return f"Shortlisting options {option_ids}."
+
+
+def _deep_dive_candidates(option_ids: Optional[List[int]] = None) -> str:
+    context = st.session_state.get("agent_context", {})
+    ss = context.get("solution_space") or {}
+    candidates = ss.get("candidates", [])
+    if not candidates:
+        return "There are no options to expand yet. Ask me to brainstorm first."
+
+    available = [c.get("id") for c in candidates]
+    selected = option_ids or ss.get("shortlisted_ids", [])
+
+    if not selected:
+        return f"Which options should I dive into? Available options: {available}."
+
+    invalid = [oid for oid in selected if oid not in available]
+    if invalid:
+        return f"Unknown option IDs: {invalid}. Available options: {available}."
+
+    run_solution_step({"selected_candidate_ids": selected}, workflow_type="deep_dive")
+    st.session_state.agent_needs_rerun = True
+    return f"Running a deep dive on options {selected}."
+
+
+def _compare_candidates() -> str:
+    context = st.session_state.get("agent_context", {})
+    ss = context.get("solution_space") or {}
+    if not ss.get("expanded_candidates"):
+        return "I need deep-dive details before I can compare. Tell me which options to deep dive first."
+
+    run_solution_step({"selected_candidate_ids": []}, workflow_type="deep_dive")
+    st.session_state.agent_needs_rerun = True
+    return "Generating a comparison of the deep-dive options now."
+
+
+def _finalize_solution(option_id: Optional[int]) -> str:
+    context = st.session_state.get("agent_context", {})
+    ss = context.get("solution_space") or {}
+    expanded = ss.get("expanded_candidates", [])
+    if not expanded:
+        return "I need deep-dive options before finalizing. Ask me to run a deep dive first."
+
+    if option_id is None:
+        available = [c.get("id") for c in expanded]
+        return f"Which option should I finalize? Available options: {available}."
+
+    available = [c.get("id") for c in expanded]
+    if option_id not in available:
+        return f"Unknown option ID: {option_id}. Available options: {available}."
+
+    run_solution_step({"final_selected_id": option_id}, workflow_type="final")
+    st.session_state.agent_needs_rerun = True
+    return f"Finalizing option {option_id}."
