@@ -52,6 +52,26 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+BLOCKING_CSS = """
+    <style>
+        [data-testid="stMain"] {
+            opacity: 0.35;
+            pointer-events: none;
+            transition: opacity 120ms ease-in-out;
+        }
+    </style>
+"""
+
+UNBLOCK_CSS = """
+    <style>
+        [data-testid="stMain"] {
+            opacity: 1;
+            pointer-events: auto;
+            transition: opacity 120ms ease-in-out;
+        }
+    </style>
+"""
+
 # Initialize State & Workflows
 initialize_session_state()
 initialize_workflows()
@@ -104,13 +124,38 @@ with st.sidebar:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
+    if st.session_state.pending_agent_input:
+        st.markdown(BLOCKING_CSS, unsafe_allow_html=True)
+        label = st.session_state.current_action_label or "Processing request..."
+        with st.spinner(label):
+            prompt = st.session_state.pending_agent_input
+            result = handle_agent_input(prompt, ps, ss)
+            for message in result.get("messages", []):
+                if not message:
+                    continue
+                st.session_state.messages.append({"role": "assistant", "content": message})
+        st.session_state.pending_agent_input = None
+
+        if st.session_state.get("pending_solution_step") is not None:
+            label = st.session_state.current_action_label or "Processing workflow..."
+            with st.spinner(label):
+                process_pending_solution_step(show_spinner=False, spinner_label=label)
+
+        st.markdown(UNBLOCK_CSS, unsafe_allow_html=True)
+        st.rerun()
+
+    if st.session_state.get("pending_solution_step") is not None:
+        st.markdown(BLOCKING_CSS, unsafe_allow_html=True)
+        label = st.session_state.current_action_label or "Processing workflow..."
+        with st.spinner(label):
+            process_pending_solution_step(show_spinner=False, spinner_label=label)
+        st.markdown(UNBLOCK_CSS, unsafe_allow_html=True)
+        st.rerun()
+
     if prompt := st.chat_input("Message the agent..."):
         st.session_state.messages.append({"role": "user", "content": prompt})
-        result = handle_agent_input(prompt, ps, ss)
-        for message in result.get("messages", []):
-            if not message:
-                continue
-            st.session_state.messages.append({"role": "assistant", "content": message})
+        st.session_state.pending_agent_input = prompt
+        st.session_state.current_action_label = "Processing request..."
         st.rerun()
 
 st.title("System Design Companion")
@@ -155,5 +200,4 @@ with tabs[5]:
     else:
         st.info("Ask the agent to compare options before finalizing.")
 
-# Execution Loop
-process_pending_solution_step()
+# Execution Loop moved into sidebar to keep spinner in chat zone.

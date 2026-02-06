@@ -83,8 +83,8 @@ def run_solution_step(inputs, workflow_type="generate"):
     st.session_state.pending_solution_step = inputs
     st.session_state.solution_processing = True
 
-def run_problem_workflow(prompt, remove_solutions=True):
-    with st.spinner("Refining Problem Space..."):
+def run_problem_workflow(prompt, remove_solutions=True, show_spinner=True, spinner_label="Refining Problem Space..."):
+    def _run():
         inputs = {
             "chat_input": prompt,
             "workspace_id": st.session_state.current_workspace_id,
@@ -101,41 +101,54 @@ def run_problem_workflow(prompt, remove_solutions=True):
         except Exception as e:
             st.error(f"Error: {e}")
             logger.exception("Error running problem workflow")
-    return False
+        return False
 
-def process_pending_solution_step():
+    if show_spinner:
+        with st.spinner(spinner_label):
+            return _run()
+    return _run()
+
+def process_pending_solution_step(show_spinner=True, spinner_label="Processing Workflow..."):
     """Execution loop for pending solution steps."""
-    if st.session_state.get("pending_solution_step") is not None:
-        with st.spinner("Processing Workflow..."):
-             inputs = st.session_state.pending_solution_step
-             workflow_type = inputs.pop("_workflow_type", "generate")
-             
-             config = {"configurable": {"thread_id": st.session_state.thread_id}}
-             try:
-                base_inputs = {
-                    "chat_input": "Execute Step", 
-                    "workspace_id": st.session_state.current_workspace_id,
-                    "version_id": st.session_state.current_version_id
-                }
-                final_inputs = {**base_inputs, **inputs}
-                
-                if workflow_type == "deep_dive":
-                    result = st.session_state.app_deep_dive.invoke(final_inputs, config)
-                elif workflow_type == "final":
-                    result = st.session_state.app_final.invoke(final_inputs, config)
-                elif workflow_type == "shortlist":
-                    result = st.session_state.app_shortlist.invoke(final_inputs, config)
-                else:
-                    result = st.session_state.app_solution.invoke(final_inputs, config)
-                
-                st.session_state.pending_solution_step = None
-                st.session_state.solution_processing = False
-                
-                if result and result.get("SaveState.final_version_id"):
-                        st.session_state.current_version_id = result["SaveState.final_version_id"]
-                        st.rerun()
-             except Exception as e:
-                st.session_state.pending_solution_step = None
-                st.session_state.solution_processing = False
-                st.error(f"Error executing solution step: {e}")
-                logger.exception("Error during execution loop")
+    if st.session_state.get("pending_solution_step") is None:
+        return
+
+    def _run():
+        inputs = st.session_state.pending_solution_step
+        workflow_type = inputs.pop("_workflow_type", "generate")
+        
+        config = {"configurable": {"thread_id": st.session_state.thread_id}}
+        try:
+            base_inputs = {
+                "chat_input": "Execute Step", 
+                "workspace_id": st.session_state.current_workspace_id,
+                "version_id": st.session_state.current_version_id
+            }
+            final_inputs = {**base_inputs, **inputs}
+            
+            if workflow_type == "deep_dive":
+                result = st.session_state.app_deep_dive.invoke(final_inputs, config)
+            elif workflow_type == "final":
+                result = st.session_state.app_final.invoke(final_inputs, config)
+            elif workflow_type == "shortlist":
+                result = st.session_state.app_shortlist.invoke(final_inputs, config)
+            else:
+                result = st.session_state.app_solution.invoke(final_inputs, config)
+            
+            st.session_state.pending_solution_step = None
+            st.session_state.solution_processing = False
+            
+            if result and result.get("SaveState.final_version_id"):
+                    st.session_state.current_version_id = result["SaveState.final_version_id"]
+                    st.rerun()
+        except Exception as e:
+            st.session_state.pending_solution_step = None
+            st.session_state.solution_processing = False
+            st.error(f"Error executing solution step: {e}")
+            logger.exception("Error during execution loop")
+
+    if show_spinner:
+        with st.spinner(spinner_label):
+            _run()
+    else:
+        _run()

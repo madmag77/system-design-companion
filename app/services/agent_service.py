@@ -40,8 +40,10 @@ Rules:
 - If the user declines, choose confirm_destructive with confirm=false.
 - If you need missing IDs, ask a short question via respond.
 - If a destructive change is pending, resolve it before taking other actions.
- - Do not ask for confirmation yourself. Use update_problem to trigger confirmation.
- - If the user requests edits to the problem space (context, invariants, goal, problem, variants), choose update_problem.
+- Do not ask for confirmation yourself. Use update_problem to trigger confirmation.
+- If the user requests edits to the problem space (context, invariants, goal, problem, variants), choose update_problem.
+- If the user asks to generate, brainstorm, add, or create another solution/option/candidate, choose brainstorm.
+- Never write solution candidates directly in respond. Use brainstorm to create them.
 Field requirements:
 - switch_workspace: set workspace_id
 - shortlist/deep_dive: set option_ids (list of integers)
@@ -186,24 +188,33 @@ def _execute_action(action: AgentAction, user_text: str, ps: dict, ss: dict) -> 
     if action.action == "list_workspaces":
         return _list_workspaces()
     if action.action == "new_workspace":
+        st.session_state.current_action_label = "Creating new workspace..."
         return _new_workspace()
     if action.action == "switch_workspace":
+        st.session_state.current_action_label = "Switching workspace..."
         return _switch_workspace(action.workspace_id)
     if action.action == "update_problem":
+        st.session_state.current_action_label = "Updating problem space..."
         return _update_problem(user_text)
     if action.action == "confirm_destructive":
         if action.confirm is None:
             return "Please confirm with yes or no."
+        st.session_state.current_action_label = "Updating problem space..."
         return _confirm_destructive(action.confirm)
     if action.action == "brainstorm":
+        st.session_state.current_action_label = "Generating a solution candidate..."
         return _brainstorm_candidate()
     if action.action == "shortlist":
+        st.session_state.current_action_label = "Updating shortlist..."
         return _shortlist_candidates(action.option_ids)
     if action.action == "deep_dive":
+        st.session_state.current_action_label = "Running deep dive..."
         return _deep_dive_candidates(action.option_ids)
     if action.action == "compare":
+        st.session_state.current_action_label = "Comparing deep-dive options..."
         return _compare_candidates()
     if action.action == "finalize":
+        st.session_state.current_action_label = "Generating final solution..."
         return _finalize_solution(action.option_id)
     return action.response or "What would you like to do next?"
 
@@ -292,7 +303,8 @@ def _update_problem(prompt: str) -> str:
             "Reply 'yes' to confirm or 'no' to cancel."
         )
 
-    success = run_problem_workflow(prompt, remove_solutions=True)
+    with st.spinner(st.session_state.current_action_label):
+        success = run_problem_workflow(prompt, remove_solutions=True, show_spinner=False)
     if success:
         st.session_state.agent_needs_rerun = True
         return "Updated the problem context."
@@ -310,7 +322,8 @@ def _confirm_destructive(confirm: bool) -> str:
 
     prompt = pending.get("payload", {}).get("prompt", "")
     st.session_state.agent_pending = None
-    success = run_problem_workflow(prompt, remove_solutions=True)
+    with st.spinner(st.session_state.current_action_label):
+        success = run_problem_workflow(prompt, remove_solutions=True, show_spinner=False)
     if success:
         st.session_state.agent_needs_rerun = True
         return "Updated the problem context and cleared the solution space."

@@ -44,6 +44,15 @@ def initialize_session_state():
     if "agent_needs_rerun" not in st.session_state:
         st.session_state.agent_needs_rerun = False
 
+    if "pending_agent_input" not in st.session_state:
+        st.session_state.pending_agent_input = None
+
+    if "current_action_label" not in st.session_state:
+        st.session_state.current_action_label = "Processing request..."
+
+    if "ui_blocking" not in st.session_state:
+        st.session_state.ui_blocking = False
+
 def get_workflow_phase(ss):
     if not ss:
         return "BRAINSTORM"
