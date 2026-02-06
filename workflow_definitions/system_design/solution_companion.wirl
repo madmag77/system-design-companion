@@ -3,6 +3,7 @@ workflow SolutionDesignCompanion {
     String chat_input
     String workspace_id
     String version_id
+    String hint
   }
   
   outputs {
@@ -26,6 +27,7 @@ workflow SolutionDesignCompanion {
       inputs {
           Record problem_space = LoadWorkspace.problem_space
           Record solution_space = LoadWorkspace.solution_space?
+          String hint = hint
       }
       # Run only if we are in BRAINSTORM phase or no phase (default)
       # Simulating simple condition via if check in code or just letting it run if requested.

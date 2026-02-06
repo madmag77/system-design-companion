@@ -126,8 +126,13 @@ GENERATE_CANDIDATE_PROMPT = ChatPromptTemplate.from_template(
     Existing Candidates (do not repeat these approaches):
     {existing_candidates}
 
+    Optional Hint:
+    {hint}
+
     **Task:**
     Generate 1 distinct Solution Candidate. Please be very concise. Later on we will dive into details of each candidate.
+
+    If a hint is provided, bias the candidate toward that theme without violating invariants.
     
     - **Hypothesis**: A concise statement proposing specific choices for the "Variants" (degrees of freedom) that will resolve the "Problem".
     - **Model**: Construct "Sparse" (Abstract) Models:

@@ -125,6 +125,9 @@ def process_pending_solution_step(show_spinner=True, spinner_label="Processing W
                 "version_id": st.session_state.current_version_id
             }
             final_inputs = {**base_inputs, **inputs}
+
+            if workflow_type == "generate" and "hint" not in final_inputs:
+                final_inputs["hint"] = ""
             
             if workflow_type == "deep_dive":
                 result = st.session_state.app_deep_dive.invoke(final_inputs, config)

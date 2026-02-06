@@ -206,7 +206,7 @@ class ComparisonResult(BaseModel):
     recommendation: str
     simplification_feedback: str
 
-def generate_candidate(problem_space: dict, solution_space: dict = None, config: dict = None) -> dict:
+def generate_candidate(problem_space: dict, solution_space: dict = None, hint: str = None, config: dict = None) -> dict:
     logger.info("generate_candidate called")
     llm = get_llm(config)
     structured_llm = llm.with_structured_output(SolutionCandidate)
@@ -231,7 +231,8 @@ def generate_candidate(problem_space: dict, solution_space: dict = None, config:
         "goal": problem_space.get("goal", ""),
         "problem": problem_space.get("problem", ""),
         "variants": problem_space.get("variants", []),
-        "existing_candidates": existing_summary
+        "existing_candidates": existing_summary,
+        "hint": hint or ""
     }
     
     try:

@@ -48,6 +48,7 @@ Field requirements:
 - switch_workspace: set workspace_id
 - shortlist/deep_dive: set option_ids (list of integers)
 - finalize: set option_id
+- brainstorm: set hint if the user specifies a theme or focus area
 - confirm_destructive: set confirm true or false
 
 Workspace:
@@ -96,6 +97,7 @@ class AgentAction(BaseModel):
     option_ids: Optional[List[int]] = None
     option_id: Optional[int] = None
     confirm: Optional[bool] = None
+    hint: Optional[str] = None
 
 
 def handle_agent_input(user_text: str, ps: dict, ss: Optional[dict]) -> Dict[str, Any]:
@@ -203,7 +205,7 @@ def _execute_action(action: AgentAction, user_text: str, ps: dict, ss: dict) -> 
         return _confirm_destructive(action.confirm)
     if action.action == "brainstorm":
         st.session_state.current_action_label = "Generating a solution candidate..."
-        return _brainstorm_candidate()
+        return _brainstorm_candidate(action.hint)
     if action.action == "shortlist":
         st.session_state.current_action_label = "Updating shortlist..."
         return _shortlist_candidates(action.option_ids)
@@ -330,15 +332,20 @@ def _confirm_destructive(confirm: bool) -> str:
     return "I ran into an issue updating the problem space."
 
 
-def _brainstorm_candidate() -> str:
+def _brainstorm_candidate(hint: Optional[str] = None) -> str:
     context = st.session_state.get("agent_context", {})
     ss = context.get("solution_space") or {}
     candidates = ss.get("candidates", [])
     if len(candidates) >= 10:
         return "We already have 10 options, which is the current limit."
 
-    run_solution_step({}, workflow_type="generate")
+    inputs = {}
+    if hint:
+        inputs["hint"] = hint
+    run_solution_step(inputs, workflow_type="generate")
     st.session_state.agent_needs_rerun = True
+    if hint:
+        return f"Adding a new solution candidate with a focus on: {hint}."
     return "Adding a new solution candidate now."
 
 
